@@ -1,87 +1,202 @@
-# Energieeffizientes Kubernetes-Scheduling (Master-Thesis)
+================================================================================
+PROJEKT: Energieeffizientes Kubernetes-Scheduling (Master-Thesis)
+================================================================================
 
-Dieses Repository enthält den Quellcode, die Konfigurationen und die Benchmark-Artefakte für eine Master-Arbeit zum Thema "Energieeffizientes Scheduling von Machine-Learning-Workloads in heterogenen Kubernetes-Clustern".
+AUTOR: Dorian Gohdes
+DATUM: 2025-11-11
+AKTIVE VERSION: v1.1-normalized-static
+
+
+================================================================================
+1. PROJEKTZIEL
+================================================================================
+
+Der Standard-Kubernetes-Scheduler ("default-scheduler") ist "energie-agnostisch".
+Er verteilt Workloads (Pods) basierend auf quantitativen Anfragen (z.B.
+"benoetigt 1 CPU"), ignoriert aber die qualitativen Hardware-Eigenschaften
+(z.B. "langsame ARM-CPU" vs. "leistungsstarke x86-CPU"). In einem
+heterogenen Cluster fuehrt dies zu suboptimalem Energieverbrauch.
+
+Dieses Projekt implementiert einen benutzerdefinierten Kubernetes-Scheduler,
+der ML-Workloads (definiert durch Profile) intelligent auf dem
+geeignetsten, verfuegbaren Knoten platziert, um den Energieverbrauch zu
+minimieren, waehrend die vom Benutzer gewuenschte Leistung erbracht wird.
+
+
+================================================================================
+2. ARCHITEKTUR & KOMPONENTEN
+================================================================================
+
+Das System besteht aus drei unentbehrlichen Komponenten:
+
+1. STATISCHE WISSENSDB (/benchmarks/knowledge-base.yaml)
+   - Zweck: Enthaelt die Benchmark-Ergebnisse (Performance, Energieverbrauch)
+     fuer jeden Knoten und jeden Workload-Typ ("training", "inference",
+     "sequential").
+   - Erstellung: Wird manuell durch Ausfuehrung der Skripte in /benchmarks/
+     erstellt und als K8s ConfigMap geladen.
+
+2. SCHEDULER-PLUGIN (/scheduler-plugin/)
+   - Zweck: Die "Intelligenz" des Projekts. Dieses Go-Plugin ersetzt den
+     Default-Scheduler fuer markierte Pods.
+   - Logik: Liest die statische Wissensdatenbank (ConfigMap), um fuer jeden
+     Knoten einen Score zu berechnen.
+
+3. ECHTZEIT-MONITOR (/energy-monitor/)
+   - Zweck: Stellt dynamische Daten bereit (fuer den zukuenftigen
+     hybriden Scheduler).
+   - Logik: Ein Python-Dienst, der Shelly-Steckdosen abfragt und den
+     aktuellen Stromverbrauch als Annotation (energy.thesis.io/current-watts)
+     an das K8s-Node-Objekt schreibt.
+
+
+================================================================================
+3. AKTUELLER STATUS & VERSIONIERUNG
+================================================================================
+
+Die Versionierung ist entscheidend fuer die Evaluation.
 
 ---
-
-## Problemstellung
-
-Der Standard-Kubernetes-Scheduler (`default-scheduler`) ist **energie-agnostisch**. Er verteilt Workloads basierend auf quantitativen Ressourcenanfragen (z.B. "benötigt 1 CPU"), ignoriert aber die qualitativen Hardware-Eigenschaften (z.B. "langsame ARM-CPU" vs. "leistungsstarke x86-CPU"). In einem **heterogenen Cluster** (gemischte Hardware) führt dies zu einem suboptimalen Energieverbrauch, da rechenintensive Jobs auf langsamen Knoten oder latenzkritische Jobs auf überdimensionierten, stromhungrigen Servern landen können.
-
-## Lösungsansatz: Hybrider Scheduler
-
-Dieses Projekt entwickelt ein benutzerdefiniertes Kubernetes-Scheduler-Plugin, das einen **hybriden Ansatz** verfolgt, um ML-Workloads auf dem energieeffizientesten *verfügbaren* Knoten zu platzieren.
-
-Das System besteht aus drei Hauptkomponenten:
-
-1.  **Wissensdatenbank (Statisch):** Eine `ConfigMap` (`benchmarks/knowledge-base.yaml`), die statische Benchmark-Profile (Leistung pro Watt, Idle-Verbrauch etc.) für jeden Knoten im Cluster enthält.
-2.  **Energy Monitor (Dynamisch):** Ein Python-Dienst (`energy-monitor/`), der den Echtzeit-Energieverbrauch (z.B. von Shelly-Steckdosen) abfragt und diesen Wert als Annotation (z.B. `energy.thesis.io/current-watts`) an das jeweilige Kubernetes-Node-Objekt schreibt.
-3.  **Scheduler Plugin (Die Logik):** Ein in Go geschriebenes Plugin (`scheduler-plugin/`), das **beide** Datenquellen kombiniert: Es prüft dynamisch, ob ein Knoten frei ist (Echtzeit-Verbrauch ≈ Idle-Verbrauch) und wählt dann aus allen freien Knoten den statisch am besten geeigneten (basierend auf der Wissensdatenbank).
+VERSION: v1.0-static (Tag: v1.0-static)
+---
+- STATUS: Stabil, im Git-Tag "v1.0-static" gesichert.
+- LOGIK: Liest statische Profile. Verwendet eine fehlerhafte Scoring-Formel,
+  bei der Rohwerte (z.B. Performance=22036) direkt mit Effizienz=310
+  verglichen werden. Dies fuehrt dazu, dass der Nutzerparameter
+  ("performance-weight") fast wirkungslos ist und alle Scores auf 100
+  abgeschnitten werden.
 
 ---
-
-## Repository-Struktur
-
-. ├── scheduler-plugin/ # (1) Der Go-Quellcode für das K8s-Scheduler-Plugin ├── energy-monitor/ # (2) Der Python-Dienst für das Echtzeit-Monitoring ├── benchmarks/ # (3) Benchmark-Skripte & die resultierende Wissensdatenbank ├── ml-workflow/ # (4) Ein Beispiel-ML-Workflow (Preprocess, Train, Infer) ├── scripts/ # Hilfsskripte (z.B. Status-Reports) └── .gitignore # Ignoriert Cache- und Build-Dateien
+VERSION: v1.1-normalized-static (Tag: v1.1-normalized-static) - AKTIV
+---
+- STATUS: Stabil, im Git-Tag "v1.1-normalized-static" gesichert.
+- LOGIK: Behebt das Problem von v1.0 durch Normalisierung.
+- PRE-SCORE PHASE: Ermittelt die clusterweiten Maxima fuer Performance (maxP)
+  und Effizienz (maxE) fuer den angeforderten Workload-Typ.
+- SCORE PHASE: Berechnet fuer jeden Knoten einen normalisierten Score (0-100)
+  fuer Leistung (normP) und Effizienz (normE).
+- FINALE FORMEL: Score = (Gewicht * normP) + ((1 - Gewicht) * normE)
+- ERGEBNIS: Der Nutzerparameter funktioniert jetzt korrekt. Der Scheduler
+  trifft eine ausgewogene Entscheidung, wie die Logs (finalScore: 45 vs 31)
+  beweisen.
 
 ---
+VERSION: v2.0-hybrid (ZUKUNFT)
+---
+- STATUS: Naechster logischer Schritt (Branch "feature/hybrid-scheduler").
+- LOGIK: Erweitert v1.1. Nutzt zusaetzlich den /energy-monitor.
+- HYBRID-CHECK: Liest die Echtzeit-Annotation "current-watts" vom Knoten.
+  IF (currentWatts > (idlePowerWatts + Puffer))
+      // Knoten ist belegt
+      return 0
+  ELSE
+      // Knoten ist frei, verwende normalisierte Formel aus v1.1
+      return normalizedScore
 
-## Komponenten im Detail
 
-### 1. scheduler-plugin
+================================================================================
+4. BUILD-PROZESS & IMAGE-STRUKTUR
+================================================================================
 
-* **`plugin.go`**: Der Go-Quellcode für das `EnergyScorer`-Plugin. Es implementiert die `Score`-Schnittstelle des Kubernetes-Scheduling-Frameworks.
-* **`k8s/*.yaml`**: Die Kubernetes-Manifeste zur Bereitstellung des Schedulers (RBAC, ConfigMap für die Plugin-Konfiguration und das Deployment selbst).
-
-**Build-Prozess (Wichtig):** Dieses Plugin wird "out-of-tree" entwickelt, muss aber "in-tree" kompiliert werden. Das bedeutet, der Quellcode des offiziellen Kubernetes-Repositories (z.B. in `~/plugin/kubernetes`) wird benötigt, um die `plugin.go` zu kompilieren. Dieses Repository ist *nicht* Teil dieses Git-Repos.
-
-### 2. energy-monitor
-
-* **`src/energy_monitor.py`**: Ein Python-Skript, das `requests` und `kubernetes-client` verwendet.
-* **Funktion:** Es läuft als Deployment im Cluster, fragt in einer Schleife die IPs der Shelly-Plugs ab und führt einen `kubectl patch node ...` aus, um die Annotation `energy.thesis.io/current-watts` am Node-Objekt zu aktualisieren.
-* **`Dockerfile` / `k8s/`**: Bau- und Deployment-Konfigurationen.
-
-### 3. benchmarks
-
-Dieser Ordner dient der **Erstellung** der Wissensdatenbank.
-
-* **`cpu/`, `gpu/`, `sequential/`**: Enthalten die Python-Testskripte, Dockerfiles und `k8s_run.yaml`-Dateien, um die verschiedenen Workload-Profile auf den einzelnen Knoten auszuführen.
-* **`knowledge-base.yaml`**: Das **Ergebnis** der Benchmarks. Diese ConfigMap wird vom `scheduler-plugin` zur Laufzeit gelesen.
+Alle Images werden mit `nerdctl` und `buildkitd` direkt in die `k8s.io`
+Namespace der k3s-Container-Runtime gebaut und in die lokale Registry
+(192.168.178.136:5000) gepusht.
 
 ---
+4.1 Scheduler-Plugin (my-energy-scheduler)
+---
+- DOCKERFILE: plugin/kubernetes/Dockerfile
+- IMAGE-STRUKTUR: Basiert auf `registry.k8s.io/build-image/go-runner`.
+  Enthaelt nichts weiter als das kompilierte `kube-scheduler` Go-Binary,
+  das unser `plugin.go` beinhaltet.
+- BUILD-PROZESS (Komplex, da "in-tree" kompiliert):
 
-## Aktueller Status & Nächste Schritte
+    # 1. (Optional) Git-Branch fuer Aenderungen erstellen
+    cd ~/thesis-energy-scheduler
+    git checkout -b feature/meine-neue-aenderung
 
-### Status: `v1.0-static` (Aktueller Commit)
+    # 2. Geaenderten Code in das K8s-Build-Verzeichnis kopieren
+    cp ~/thesis-energy-scheduler/scheduler-plugin/plugin.go \
+       ~/plugin/kubernetes/staging/src/k8s.io/myenergyplugin/myenergyplugin.go
 
-Der Code im `main`-Branch (Tag: `v1.0-static`) repräsentiert einen rein **statischen Scheduler**.
+    # 3. Go-Binary kompilieren
+    cd ~/plugin/kubernetes
+    make kube-scheduler
 
-* **Logik:** Die `plugin.go` liest *ausschließlich* die `benchmarks/knowledge-base.yaml`.
-* **Schwäche:** Der Scheduler weiß nicht, ob ein Knoten bereits belegt ist. Er würde einen Job an den statisch besten Knoten (z.B. `tvpc-gpu`) senden, selbst wenn dieser bereits unter Volllast läuft.
+    # 4. Build-Daemon starten (falls nicht schon laeuft)
+    sudo buildkitd &
 
-### Nächste Schritte: `v2.0-hybrid`
+    # 5. Image bauen (TAG anpassen!)
+    export TAG=v2.2-meine-aenderung
+    export REGISTRY_IP=192.168.178.136:5000
+    sudo nerdctl --address /run/k8s/containerd/containerd.sock -n k8s.io \
+      build . -t $REGISTRY_IP/my-energy-scheduler:$TAG
 
-Das Hauptziel ist nun die Implementierung der **hybriden Logik**. Dies sollte in einem neuen Branch geschehen:
+---
+4.2 Python-Images (z.B. energy-monitor, benchmarks)
+---
+- DOCKERFILES: z.B. energy-monitor/Dockerfile, benchmarks/cpu/Dockerfile.cpu.multiarch
+- IMAGE-STRUKTUR:
+    - `energy-monitor`: Basiert auf `python:3.9-slim`. Installiert `requests`
+      und `kubernetes-client` via pip und kopiert das `energy_monitor.py` Skript.
+    - `benchmark-cpu`: Basiert auf `python:3.9-slim-bullseye`. Installiert
+      `build-essential` via apt und `numpy` via pip.
+    - `benchmark-gpu`: Basiert auf `pytorch/pytorch:2.1.0-cuda...`. Kopiert
+      nur das `gpu-task.py` Skript (PyTorch ist im Base-Image).
+- BUILD-PROZESS (Einfach, da "standalone"):
 
-```bash
-git checkout -b feature/hybrid-scheduler
-```
-Zu erledigende Aufgaben:
+    # 1. In das Verzeichnis des jeweiligen Dockerfiles wechseln
+    cd ~/thesis-energy-scheduler/energy-monitor
 
-    Modifikation von scheduler-plugin/plugin.go (in der Score-Funktion):
+    # 2. Build-Daemon starten
+    sudo buildkitd &
 
-        Das node-Objekt aus dem Framework-Snapshot holen (es.handle.SnapshotSharedLista()).
+    # 3. Image bauen (TAG und NAME anpassen!)
+    export IMAGE_NAME=energy-monitor
+    export IMAGE_TAG=v1.1
+    export REGISTRY_IP=192.168.178.136:5000
+    sudo nerdctl --address /run/k8s/containerd/containerd.sock -n k8s.io \
+      build . -t $REGISTRY_IP/$IMAGE_NAME:$IMAGE_TAG
 
-        Die Echtzeit-Energie-Annotation auslesen: node.GetAnnotations()["energy.thesis.io/current-watts"].
 
-        Den statischen idlePowerWatts-Wert aus dem Profil (ConfigMap) holen.
+================================================================================
+5. IMAGE-DEPLOYMENT (PUSH & APPLY)
+================================================================================
 
-    Implementierung der hybriden Logik:
+Ein Image zu bauen, laedt es noch nicht in die Registry.
 
-        IF currentWatts > (idlePowerWatts + 5.0): Der Knoten ist belegt. return 0 (gib dem Knoten 0 Punkte).
+---
+5.1 Image in die lokale Registry pushen
+---
+JEDES neu gebaute Image muss gepusht werden, damit K8s es finden kann.
 
-        ELSE: Der Knoten ist frei. Führe die bisherige statische Scoring-Formel aus (Performance vs. Effizienz).
+    export IMAGE_NAME=my-energy-scheduler
+    export IMAGE_TAG=v2.1-normalized
+    export REGISTRY_IP=192.168.178.136:5000
 
-    Bauen & Testen: Das neue Plugin kompilieren, als neues Image (z.B. v2) in die lokale Registry pushen und das Deployment aktualisieren.
+    sudo nerdctl --address /run/k8s/containerd/containerd.sock -n k8s.io \
+      push --insecure-registry $REGISTRY_IP/$IMAGE_NAME:$IMAGE_TAG
 
-    Evaluation: Die Evaluation (Kapitel 7 der Thesis) durchführen, indem das v2.0-hybrid Plugin mit dem v1.0-static Plugin und dem default-scheduler verglichen wird.
+---
+5.2 Deployment aktualisieren (Zwei Szenarien)
+---
+
+**SZENARIO A: Sie haben ein neues IMAGE gebaut (Code-Aenderung)**
+
+Sie muessen dem K8s-Deployment sagen, dass es das neue Image-Tag verwenden soll.
+Der Pod wird automatisch neu gestartet.
+
+    kubectl set image deployment/my-energy-scheduler -n kube-system \
+      scheduler=192.168.178.136:5000/my-energy-scheduler:v2.1-normalized
+
+**SZENARIO B: Sie haben eine KONFIGURATION geaendert (YAML-Aenderung)**
+
+Der Scheduler-Pod liest seine Konfiguration (`my-scheduler-config.yaml`) nur
+beim Start. Ein `kubectl apply` reicht NICHT aus.
+
+    # 1. Aenderung im Cluster anwenden
+    cd ~/thesis-energy-scheduler
+    kubectl apply -f scheduler-plugin/k8s/my-scheduler-config.yaml
+
+    # 2. Neustart des Schedulers erzwingen, um die neue Konfig zu laden
+    kubectl delete pod -n kube-system -l app=my-energy-scheduler
