@@ -1,0 +1,87 @@
+# Energieeffizientes Kubernetes-Scheduling (Master-Thesis)
+
+Dieses Repository enthält den Quellcode, die Konfigurationen und die Benchmark-Artefakte für eine Master-Arbeit zum Thema "Energieeffizientes Scheduling von Machine-Learning-Workloads in heterogenen Kubernetes-Clustern".
+
+---
+
+## Problemstellung
+
+Der Standard-Kubernetes-Scheduler (`default-scheduler`) ist **energie-agnostisch**. Er verteilt Workloads basierend auf quantitativen Ressourcenanfragen (z.B. "benötigt 1 CPU"), ignoriert aber die qualitativen Hardware-Eigenschaften (z.B. "langsame ARM-CPU" vs. "leistungsstarke x86-CPU"). In einem **heterogenen Cluster** (gemischte Hardware) führt dies zu einem suboptimalen Energieverbrauch, da rechenintensive Jobs auf langsamen Knoten oder latenzkritische Jobs auf überdimensionierten, stromhungrigen Servern landen können.
+
+## Lösungsansatz: Hybrider Scheduler
+
+Dieses Projekt entwickelt ein benutzerdefiniertes Kubernetes-Scheduler-Plugin, das einen **hybriden Ansatz** verfolgt, um ML-Workloads auf dem energieeffizientesten *verfügbaren* Knoten zu platzieren.
+
+Das System besteht aus drei Hauptkomponenten:
+
+1.  **Wissensdatenbank (Statisch):** Eine `ConfigMap` (`benchmarks/knowledge-base.yaml`), die statische Benchmark-Profile (Leistung pro Watt, Idle-Verbrauch etc.) für jeden Knoten im Cluster enthält.
+2.  **Energy Monitor (Dynamisch):** Ein Python-Dienst (`energy-monitor/`), der den Echtzeit-Energieverbrauch (z.B. von Shelly-Steckdosen) abfragt und diesen Wert als Annotation (z.B. `energy.thesis.io/current-watts`) an das jeweilige Kubernetes-Node-Objekt schreibt.
+3.  **Scheduler Plugin (Die Logik):** Ein in Go geschriebenes Plugin (`scheduler-plugin/`), das **beide** Datenquellen kombiniert: Es prüft dynamisch, ob ein Knoten frei ist (Echtzeit-Verbrauch ≈ Idle-Verbrauch) und wählt dann aus allen freien Knoten den statisch am besten geeigneten (basierend auf der Wissensdatenbank).
+
+---
+
+## Repository-Struktur
+
+. ├── scheduler-plugin/ # (1) Der Go-Quellcode für das K8s-Scheduler-Plugin ├── energy-monitor/ # (2) Der Python-Dienst für das Echtzeit-Monitoring ├── benchmarks/ # (3) Benchmark-Skripte & die resultierende Wissensdatenbank ├── ml-workflow/ # (4) Ein Beispiel-ML-Workflow (Preprocess, Train, Infer) ├── scripts/ # Hilfsskripte (z.B. Status-Reports) └── .gitignore # Ignoriert Cache- und Build-Dateien
+
+---
+
+## Komponenten im Detail
+
+### 1. scheduler-plugin
+
+* **`plugin.go`**: Der Go-Quellcode für das `EnergyScorer`-Plugin. Es implementiert die `Score`-Schnittstelle des Kubernetes-Scheduling-Frameworks.
+* **`k8s/*.yaml`**: Die Kubernetes-Manifeste zur Bereitstellung des Schedulers (RBAC, ConfigMap für die Plugin-Konfiguration und das Deployment selbst).
+
+**Build-Prozess (Wichtig):** Dieses Plugin wird "out-of-tree" entwickelt, muss aber "in-tree" kompiliert werden. Das bedeutet, der Quellcode des offiziellen Kubernetes-Repositories (z.B. in `~/plugin/kubernetes`) wird benötigt, um die `plugin.go` zu kompilieren. Dieses Repository ist *nicht* Teil dieses Git-Repos.
+
+### 2. energy-monitor
+
+* **`src/energy_monitor.py`**: Ein Python-Skript, das `requests` und `kubernetes-client` verwendet.
+* **Funktion:** Es läuft als Deployment im Cluster, fragt in einer Schleife die IPs der Shelly-Plugs ab und führt einen `kubectl patch node ...` aus, um die Annotation `energy.thesis.io/current-watts` am Node-Objekt zu aktualisieren.
+* **`Dockerfile` / `k8s/`**: Bau- und Deployment-Konfigurationen.
+
+### 3. benchmarks
+
+Dieser Ordner dient der **Erstellung** der Wissensdatenbank.
+
+* **`cpu/`, `gpu/`, `sequential/`**: Enthalten die Python-Testskripte, Dockerfiles und `k8s_run.yaml`-Dateien, um die verschiedenen Workload-Profile auf den einzelnen Knoten auszuführen.
+* **`knowledge-base.yaml`**: Das **Ergebnis** der Benchmarks. Diese ConfigMap wird vom `scheduler-plugin` zur Laufzeit gelesen.
+
+---
+
+## Aktueller Status & Nächste Schritte
+
+### Status: `v1.0-static` (Aktueller Commit)
+
+Der Code im `main`-Branch (Tag: `v1.0-static`) repräsentiert einen rein **statischen Scheduler**.
+
+* **Logik:** Die `plugin.go` liest *ausschließlich* die `benchmarks/knowledge-base.yaml`.
+* **Schwäche:** Der Scheduler weiß nicht, ob ein Knoten bereits belegt ist. Er würde einen Job an den statisch besten Knoten (z.B. `tvpc-gpu`) senden, selbst wenn dieser bereits unter Volllast läuft.
+
+### Nächste Schritte: `v2.0-hybrid`
+
+Das Hauptziel ist nun die Implementierung der **hybriden Logik**. Dies sollte in einem neuen Branch geschehen:
+
+```bash
+git checkout -b feature/hybrid-scheduler
+```
+Zu erledigende Aufgaben:
+
+    Modifikation von scheduler-plugin/plugin.go (in der Score-Funktion):
+
+        Das node-Objekt aus dem Framework-Snapshot holen (es.handle.SnapshotSharedLista()).
+
+        Die Echtzeit-Energie-Annotation auslesen: node.GetAnnotations()["energy.thesis.io/current-watts"].
+
+        Den statischen idlePowerWatts-Wert aus dem Profil (ConfigMap) holen.
+
+    Implementierung der hybriden Logik:
+
+        IF currentWatts > (idlePowerWatts + 5.0): Der Knoten ist belegt. return 0 (gib dem Knoten 0 Punkte).
+
+        ELSE: Der Knoten ist frei. Führe die bisherige statische Scoring-Formel aus (Performance vs. Effizienz).
+
+    Bauen & Testen: Das neue Plugin kompilieren, als neues Image (z.B. v2) in die lokale Registry pushen und das Deployment aktualisieren.
+
+    Evaluation: Die Evaluation (Kapitel 7 der Thesis) durchführen, indem das v2.0-hybrid Plugin mit dem v1.0-static Plugin und dem default-scheduler verglichen wird.
