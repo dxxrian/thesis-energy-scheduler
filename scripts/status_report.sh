@@ -2,6 +2,10 @@
 
 # --- Skript zur Erstellung eines umfassenden System- und Projekt-Statusberichts ---
 
+# Gehe immer ins Repository-Stammverzeichnis (eine Ebene über dem 'scripts'-Ordner)
+cd "$(dirname "$0")/.." || exit 1
+
+# Die Output-Datei wird jetzt im Stammverzeichnis des Repos erstellt
 OUTPUT_FILE="system_status_latest.txt"
 
 log_header() {
@@ -62,8 +66,8 @@ log_header "3. Containerd & Registry-Status auf dem Master-Knoten"
 # --- 4. Scheduler-Implementierung & Konfiguration ---
 log_header "4. Scheduler-Implementierung & Konfiguration"
 {
-    echo "### Quellcode des Go-Plugins (myenergyplugin.go):"
-    PLUGIN_PATH="plugin/kubernetes/staging/src/k8s.io/myenergyplugin/myenergyplugin.go"
+    echo "### Quellcode des Go-Plugins (plugin.go):"
+    PLUGIN_PATH="scheduler-plugin/plugin.go"
     if [ -f "$PLUGIN_PATH" ]; then
         cat "$PLUGIN_PATH"
     else
@@ -71,8 +75,8 @@ log_header "4. Scheduler-Implementierung & Konfiguration"
     fi
 
     echo -e "\n\n### Deployment-Konfigurationen des Schedulers:"
-    # Explizit die relevanten Dateien aus dem plugin-Verzeichnis anzeigen
-    for file in plugin/my-scheduler-*.yaml; do
+    # Explizit die relevanten Dateien aus dem k8s-Verzeichnis anzeigen
+    for file in scheduler-plugin/k8s/*.yaml; do
         echo -e "\n--- Inhalt von: $file ---"
         cat "$file"
         echo -e "\n--- Ende von: $file ---\n"
@@ -88,10 +92,11 @@ log_header "5. Baseline- & Benchmark-Konfigurationen"
     echo -e "\n### Wissensdatenbank des Schedulers (Leistungsdaten):"
     kubectl get configmap scheduler-knowledge-base -n kube-system -o yaml
 
-    echo -e "\n\n--- Verzeichnis: benchmark ---"
+    echo -e "\n\n--- Verzeichnis: benchmarks ---"
     echo "### Dateiliste:"
-    ls -l "benchmark"
-    find "benchmark" -type f | while read -r file; do
+    ls -l "benchmarks"
+    # Findet alle Dateien in 'benchmarks', ignoriert Git/Cache
+    find "benchmarks" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" | while read -r file; do
         echo -e "\n--- Inhalt von: $file ---"
         cat "$file"
         echo -e "\n--- Ende von: $file ---\n"
@@ -105,7 +110,7 @@ log_header "6. Energy-Monitor Implementierung"
     echo -e "\n\n--- Verzeichnis: energy-monitor ---"
     echo "### Dateiliste:"
     ls -l "energy-monitor"
-    find "energy-monitor" -type f | while read -r file; do
+    find "energy-monitor" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" | while read -r file; do
         echo -e "\n--- Inhalt von: $file ---"
         cat "$file"
         echo -e "\n--- Ende von: $file ---\n"
@@ -113,10 +118,24 @@ log_header "6. Energy-Monitor Implementierung"
 } >> "$OUTPUT_FILE" 2>&1
 
 
-# --- 7. Diagnose für fehlerhafte Pods ---
+# --- 7. ML-Workflow Implementierung (NEU) ---
+log_header "7. ML-Workflow Implementierung"
+{
+    echo -e "\n\n--- Verzeichnis: ml-workflow ---"
+    echo "### Dateiliste:"
+    ls -l "ml-workflow"
+    find "ml-workflow" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" | while read -r file; do
+        echo -e "\n--- Inhalt von: $file ---"
+        cat "$file"
+        echo -e "\n--- Ende von: $file ---\n"
+    done
+} >> "$OUTPUT_FILE" 2>&1
+
+
+# --- 8. Diagnose für fehlerhafte Pods ---
 failing_pods=$(kubectl get pods --all-namespaces | grep -v -E "Running|Completed|NAME")
 
-log_header "7. Diagnose für fehlerhafte oder wartende Pods"
+log_header "8. Diagnose für fehlerhafte oder wartende Pods"
 {
 if [ -z "$failing_pods" ]; then
     echo "✅ Alle Pods sind im Status 'Running' oder 'Completed'. Keine Probleme gefunden." | tee -a "$OUTPUT_FILE"
@@ -136,8 +155,8 @@ else
 fi
 } >> "$OUTPUT_FILE" 2>&1
 
-# --- 8. Laufzeit-Status des Custom Schedulers ---
-log_header "8. Laufzeit-Status des Custom Schedulers (my-energy-scheduler)"
+# --- 9. Laufzeit-Status des Custom Schedulers ---
+log_header "9. Laufzeit-Status des Custom Schedulers (my-energy-scheduler)"
 {
     SCHEDULER_POD=$(kubectl get pods -n kube-system -l app=my-energy-scheduler -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
@@ -153,5 +172,19 @@ log_header "8. Laufzeit-Status des Custom Schedulers (my-energy-scheduler)"
     kubectl get events --all-namespaces --field-selector reportingComponent=my-energy-scheduler || echo "Keine Scheduling-Events vom Custom Scheduler gefunden."
 
 } >> "$OUTPUT_FILE" 2>&1
+
+# --- 10. Git-Repository-Status (NEU) ---
+log_header "10. Git-Repository-Status"
+{
+    echo "### Git Remote (Backup-Status):"
+    git remote -v
+    echo -e "\n### Lokaler Status:"
+    git status
+    echo -e "\n### Letzte 10 Commits:"
+    git log --oneline --graph -n 10
+    echo -e "\n### Vorhandene Tags (Versionen):"
+    git tag
+} >> "$OUTPUT_FILE" 2>&1
+
 
 echo -e "\n✅ Statusbericht erfolgreich erstellt: $OUTPUT_FILE"
