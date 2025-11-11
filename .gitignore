@@ -1,0 +1,16 @@
+# Erstellen Sie eine Datei .gitignore mit diesem Inhalt:
+.DS_Store
+*.log
+*.txt
+
+# Ignoriere Go-Build-Sachen
+go/pkg/
+go/bin/
+
+# Ignoriere den Kubernetes-Build-Ordner VOLLSTÄNDIG
+# (Dieser Ordner sollte SOWIESO nicht im Repo sein)
+kubernetes/ 
+
+# Python-Cache
+__pycache__/
+*.pyc

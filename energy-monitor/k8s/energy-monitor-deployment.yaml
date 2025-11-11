@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: energy-monitor
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: energy-monitor
+  template:
+    metadata:
+      labels:
+        app: energy-monitor
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: tvpc
+      serviceAccountName: energy-monitor-sa
+      containers:
+      - name: monitor
+        image: 192.168.178.136:5000/energy-monitor:v1
+        imagePullPolicy: Always

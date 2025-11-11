@@ -1,0 +1,63 @@
+# scheduler-knowledge-base.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler-knowledge-base
+  namespace: kube-system
+data:
+  profiles.yaml: |
+    # Profil 1: Training (große, parallele Last)
+    training:
+      # Leistung in It/min
+      - nodeName: "tvpc-cpu" # Eindeutiger Name zur Unterscheidung von der GPU
+        performanceRate: 68.39
+        powerConsumptionWatts: 136.89
+        idlePowerWatts: 50.06
+      - nodeName: "dgoh-wyze-cpu"
+        performanceRate: 17.44
+        powerConsumptionWatts: 12.76
+        idlePowerWatts: 2.75
+      - nodeName: "rpi-cpu"
+        performanceRate: 0.0042
+        powerConsumptionWatts: 2.93
+        idlePowerWatts: 2.32
+      - nodeName: "tvpc-gpu"
+        performanceRate: 1715.98
+        powerConsumptionWatts: 226.72
+        idlePowerWatts: 50.06
+
+    # Profil 2: Inferenz (viele kleine, parallele Lasten)
+    inference:
+      # Leistung in It/s
+      - nodeName: "tvpc-cpu"
+        performanceRate: 22036.82
+        powerConsumptionWatts: 120.95
+        idlePowerWatts: 50.06
+      - nodeName: "dgoh-wyze-cpu"
+        performanceRate: 7742.88
+        powerConsumptionWatts: 10.77
+        idlePowerWatts: 2.75
+      - nodeName: "rpi-cpu"
+        performanceRate: 22.11
+        powerConsumptionWatts: 2.93
+        idlePowerWatts: 2.32
+      - nodeName: "tvpc-gpu"
+        performanceRate: 59110.14
+        powerConsumptionWatts: 98.14
+        idlePowerWatts: 50.06
+
+    # Profil 3: Sequenziell (Single-Core-Last)
+    sequential:
+      # Leistung in Hashes/ms (Hashes/s geteilt durch 1000)
+      - nodeName: "tvpc-cpu"
+        performanceRate: 1184.01
+        powerConsumptionWatts: 77.52
+        idlePowerWatts: 50.06
+      - nodeName: "dgoh-wyze-cpu"
+        performanceRate: 741.07
+        powerConsumptionWatts: 5.03
+        idlePowerWatts: 2.75
+      - nodeName: "rpi-cpu"
+        performanceRate: 71.96
+        powerConsumptionWatts: 2.80
+        idlePowerWatts: 2.32

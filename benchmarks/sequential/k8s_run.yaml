@@ -1,0 +1,18 @@
+# sequential-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sequential-test
+spec:
+  restartPolicy: Never
+  nodeName: "rpi"
+  containers:
+  - name: sequential-task
+    image: 192.168.178.121:5000/sequential-benchmark:armv7-v2 #amd64-v2 oder armv7-v2
+    env:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+    - name: "HASH_ITERATIONS"
+      value: "5000000"

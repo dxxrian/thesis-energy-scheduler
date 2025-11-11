@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-energy-scheduler
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-energy-scheduler
+  template:
+    metadata:
+      labels:
+        app: my-energy-scheduler
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: tvpc
+      serviceAccountName: my-energy-scheduler-sa
+      containers:
+      - name: scheduler
+        image: 192.168.178.136:5000/my-energy-scheduler:v2
+        args:
+        - --config=/etc/kubernetes/scheduler-config.yaml
+        - --v=4
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/kubernetes
+      volumes:
+      - name: config-volume
+        configMap:
+          name: my-scheduler-config

@@ -1,0 +1,26 @@
+# ml-workflow/kube/3-job-inference-cpu.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ml-inference-cpu-job
+  labels:
+    app: ml-workflow # Hinzugefügt für das Cleanup
+spec:
+  template:
+    metadata:
+      labels:
+        app: ml-workflow # Hinzugefügt für das Cleanup
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: inference-cpu
+        image: 192.168.178.136:5000/ml-workflow-cpu:v2
+        command: ["python3", "inference.py"]
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+      volumes:
+      - name: data-storage
+        persistentVolumeClaim:
+          claimName: ml-workflow-pvc
+  backoffLimit: 4

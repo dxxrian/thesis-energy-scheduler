@@ -1,0 +1,14 @@
+# benchmark/Dockerfile.cpu.multiarch
+FROM python:3.9-slim-bullseye
+
+WORKDIR /app
+
+COPY cpu-task.py .
+COPY requirements.cpu.txt .
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && pip install --no-cache-dir -r requirements.cpu.txt \
+    && apt-get purge -y --auto-remove build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["python", "cpu-task.py"]

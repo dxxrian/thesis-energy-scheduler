@@ -1,0 +1,9 @@
+FROM python:3.9-slim-bullseye
+WORKDIR /app
+# ZUERST Build-Tools installieren, DANN Python-Pakete, DANACH aufräumen
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && pip install --no-cache-dir pandas requests scikit-learn openpyxl tensorflow \
+    && apt-get purge -y --auto-remove build-essential \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/ .
+CMD ["python", "preprocess.py"]

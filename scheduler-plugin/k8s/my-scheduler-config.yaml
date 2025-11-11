@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-scheduler-config
+  namespace: kube-system
+data:
+  scheduler-config.yaml: |
+    apiVersion: kubescheduler.config.k8s.io/v1beta3
+    kind: KubeSchedulerConfiguration
+    leaderElection:
+      leaderElect: true
+      resourceName: my-energy-scheduler-lock
+      resourceNamespace: kube-system
+    profiles:
+      - schedulerName: my-energy-scheduler
+        plugins:
+          filter:
+            enabled:
+              - name: NodeUnschedulable
+              - name: NodeName
+              - name: TaintToleration
+              - name: NodeResourcesFit
+          score:
+            enabled:
+              # Die Standard-Plugins werden jetzt nicht mehr deaktiviert,
+              # aber unser Plugin bekommt das höchste Gewicht.
+              - name: EnergyScorer
+                weight: 100 # Noch höheres Gewicht zur Sicherheit
+              - name: NodeResourcesBalancedAllocation
+                weight: 1
+              - name: ImageLocality
+                weight: 1
+        pluginConfig:
+          - name: EnergyScorer
+            args: {}

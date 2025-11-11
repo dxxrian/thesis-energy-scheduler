@@ -1,0 +1,8 @@
+# Dockerfile.sequential
+FROM python:3.9-slim-bullseye
+
+WORKDIR /app
+
+COPY sequential-task.py .
+
+ENTRYPOINT ["python", "sequential-task.py"]
