@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: scheduler-test-pod-cpu
+  labels:
+    # 1. Wir testen das "inference"-Profil
+    workload-profile: "inference"
+  annotations:
+    # 2. 50/50 Gewichtung
+    scheduler.policy/performance-weight: "0.5"
+spec:
+  # 3. Unser Scheduler
+  schedulerName: my-energy-scheduler
+  restartPolicy: Never
+  containers:
+  - name: test-container
+    image: "rancher/mirrored-pause:3.9" 
+    resources:
+      requests:
+        # 4. Fordert nur CPU an
+        cpu: "100m"

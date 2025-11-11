@@ -14,6 +14,9 @@ data:
     profiles:
       - schedulerName: my-energy-scheduler
         plugins:
+          preScore:
+            enabled:
+              - name: EnergyScorer
           filter:
             enabled:
               - name: NodeUnschedulable
