@@ -1,16 +1,20 @@
-# ml-workflow/kube/2-job-train-gpu.yaml
+# k8s/2-job-train-gpu.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: ml-train-gpu-job
   labels:
-    app: ml-workflow # Hinzugefügt für das Cleanup
+    app: ml-workflow
 spec:
   template:
     metadata:
       labels:
-        app: ml-workflow # Hinzugefügt für das Cleanup
+        app: ml-workflow
+        workload-profile: "training"
+      annotations:
+        scheduler.policy/performance-weight: "0.8"
     spec:
+      schedulerName: my-energy-scheduler
       runtimeClassName: nvidia
       restartPolicy: Never
       containers:

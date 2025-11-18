@@ -1,21 +1,67 @@
-# ml-workflow/Dockerfile
-# Nutze das offizielle TensorFlow-Image (CPU-Version für maximale Kompatibilität)
-FROM tensorflow/tensorflow:latest
+# ml-workflow/Dockerfile.cpu
 
-# Arbeitsverzeichnis im Container setzen
+# 1. WICHTIG: Wir nutzen Python 3.8, da das No-AVX-Wheel speziell für cp38 gebaut ist.
+FROM python:3.8-slim
+
+# Arbeitsverzeichnis setzen
 WORKDIR /app
 
-# Systempakete installieren (für pandas/excel)
+# 2. Systempakete installieren
+# libgomp1 wird oft für scikit-learn/numpy benötigt (OpenMP Unterstützung)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# 3. Das lokale No-AVX Wheel in den Container kopieren
+# (Die .whl Datei muss im selben Ordner wie dieses Dockerfile liegen!)
+COPY tensorflow-2.3.0-cp38-cp38-linux_x86_64.whl /tmp/
+
+# 4. Installation aller Abhängigkeiten in einem Schritt
+# - Zuerst das lokale No-AVX TensorFlow
+# - Dann protobuf pinnen (Fix für den Exit Code 1 Fehler)
+# - Dann Ihre Standard-Pakete (pandas, scikit-learn, etc.)
+RUN pip install --no-cache-dir --default-timeout=1000 \
+    /tmp/tensorflow-2.3.0-cp38-cp38-linux_x86_64.whl \
+    "protobuf<=3.20.3" \
+    pandas \
+    requests \
+    scikit-learn \
+    openpyxl
+
+# 5. Datensatz + Quellcode kopieren
+COPY online+retail+ii.zip .
+COPY src/ .
+
+# Standard-Befehl
+CMD ["python", "preprocess.py"]
+
+
+#ALT:
+# ml-workflow/Dockerfile
+# Nutze das offizielle TensorFlow-Image (CPU-Version für maximale Kompatibilität)
+#FROM tensorflow/tensorflow:latest
+#FROM deeplabcut/deeplabcut:2.2.1.1-tf-cpu-py38
+
+# Arbeitsverzeichnis im Container setzen
+#WORKDIR /app
+
+# Systempakete installieren (für pandas/excel)
+#RUN apt-get update && apt-get install -y --no-install-recommends \
+#    libgomp1 \
+#    && rm -rf /var/lib/apt/lists/*
+
+
 # Benötigte Python-Bibliotheken installieren
 # openpyxl wird von pandas zum Lesen von .xlsx-Dateien benötigt
-RUN pip install --no-cache-dir pandas requests scikit-learn openpyxl
+#RUN pip install --no-cache-dir pandas requests scikit-learn openpyxl
 
+#RUN pip install --no-cache-dir --upgrade \
+#    pandas \
+#    requests \
+#    scikit-learn \
+#    openpyxl
 # Kopiere die Skripte in das Arbeitsverzeichnis
-COPY scripts/ .
+#COPY src/ .
 
 # Standard-Befehl (kann im K8s-Job überschrieben werden)
-CMD ["python", "preprocess.py"]
+#CMD ["python", "preprocess.py"]

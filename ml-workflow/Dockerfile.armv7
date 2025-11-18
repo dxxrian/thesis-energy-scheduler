@@ -1,9 +1,15 @@
+# Dockerfile.armv7 (Dummy-Version)
+# Basis-Image ist korrekt
 FROM python:3.9-slim-bullseye
 WORKDIR /app
-# ZUERST Build-Tools installieren, DANN Python-Pakete, DANACH aufräumen
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
-    && pip install --no-cache-dir pandas requests scikit-learn openpyxl tensorflow \
-    && apt-get purge -y --auto-remove build-essential \
-    && rm -rf /var/lib/apt/lists/*
-COPY scripts/ .
-CMD ["python", "preprocess.py"]
+
+# WIR ÜBERSPRINGEN DEN 'pip install'-BEFEHL, DER 4 STUNDEN DAUERT
+# Stattdessen installieren wir nur ein Hilfsprogramm
+RUN apt-get update && apt-get install -y --no-install-recommends procps && rm -rf /var/lib/apt/lists/*
+
+# Wir kopieren den Code, damit der Container "echt" aussieht
+COPY src/ .
+
+# Der CMD wird sofort fehlschlagen (z.B. "pandas not found"), 
+# ABER NUR, WENN der Scheduler fälschlicherweise diesen Knoten auswählt.
+CMD ["python3", "preprocess.py"]

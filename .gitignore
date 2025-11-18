@@ -14,3 +14,16 @@ kubernetes/
 # Python-Cache
 __pycache__/
 *.pyc
+
+# Große Binärdateien ignorieren
+online+retail+ii.zip
+*.whl
+*.h5
+*.keras
+
+# Temporäre Ordner
+__pycache__/
+.ipynb_checkpoints/
+
+# Lokale NFS Mountpunkte (falls vorhanden)
+nfs/

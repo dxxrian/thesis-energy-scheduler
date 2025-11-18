@@ -1,21 +1,28 @@
-# ml-workflow/Dockerfile
-# Nutze das offizielle TensorFlow-Image mit GPU-Unterstützung
-FROM tensorflow/tensorflow:latest-gpu
+# ml-workflow/Dockerfile.gpu
+# WIR ÄNDERN DAS BASIS-IMAGE auf das, das im 'gpu-test-pod' funktioniert hat
+FROM nvidia/cuda:12.0.0-base-ubuntu22.04
 
-# Arbeitsverzeichnis im Container setzen
 WORKDIR /app
 
-# Systempakete installieren (für pandas/excel)
+# Installiere Python und Abhängigkeiten
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Benötigte Python-Bibliotheken installieren
-# openpyxl wird von pandas zum Lesen von .xlsx-Dateien benötigt
-RUN pip install --no-cache-dir pandas requests scikit-learn openpyxl
+# Installiere die Python-Bibliotheken
+# WICHTIG: Wir installieren tensorflow[and-cuda] manuell
+RUN pip install --no-cache-dir \
+    tensorflow[and-cuda] \
+    pandas \
+    requests \
+    scikit-learn \
+    openpyxl
 
-# Kopiere die Skripte in das Arbeitsverzeichnis
-COPY scripts/ .
+# Kopiere den Datensatz und die Skripte in das Arbeitsverzeichnis
+COPY online+retail+ii.zip .
+COPY src/ .
 
 # Standard-Befehl (kann im K8s-Job überschrieben werden)
-CMD ["python", "preprocess.py"]
+CMD ["python3", "preprocess.py"]
