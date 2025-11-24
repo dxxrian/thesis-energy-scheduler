@@ -4,18 +4,25 @@ kind: Job
 metadata:
   name: ml-inference-cpu-job
   labels:
-    app: ml-workflow # Hinzugefügt für das Cleanup
+    app: ml-workflow
 spec:
   template:
     metadata:
       labels:
-        app: ml-workflow # Hinzugefügt für das Cleanup
+        app: ml-workflow
+        workload-profile: "inference"
+      annotations:
+        scheduler.policy/performance-weight: "0.0"
     spec:
+      schedulerName: my-energy-scheduler
       restartPolicy: Never
       containers:
       - name: inference-cpu
-        image: 192.168.178.136:5000/ml-workflow-cpu:v2
+        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v24
         command: ["python3", "inference.py"]
+        env:
+        - name: TOTAL_SAMPLES
+          value: "1000000"
         volumeMounts:
         - name: data-storage
           mountPath: /data

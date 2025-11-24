@@ -4,18 +4,22 @@ kind: Job
 metadata:
   name: ml-inference-gpu-job
   labels:
-    app: ml-workflow # Hinzugefügt für das Cleanup
+    app: ml-workflow
 spec:
   template:
     metadata:
       labels:
-        app: ml-workflow # Hinzugefügt für das Cleanup
+        app: ml-workflow
+        workload-profile: "inference"
+      annotations:
+        scheduler.policy/performance-weight: "0.9"
     spec:
+      schedulerName: my-energy-scheduler
       runtimeClassName: nvidia
       restartPolicy: Never
       containers:
       - name: inference-gpu
-        image: 192.168.178.136:5000/ml-workflow-gpu:v2
+        image: 192.168.178.136:5000/ml-workflow-gpu:v24
         command: ["python3", "inference.py"]
         resources:
           limits:

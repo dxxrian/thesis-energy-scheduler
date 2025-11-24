@@ -1,4 +1,4 @@
-# ml-workflow/scripts/train.py
+# ml-workflow/src/train.py
 import tensorflow as tf
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -7,109 +7,95 @@ from sklearn.compose import ColumnTransformer
 import time
 import os
 import sys
+import shutil
+
+# KONFIGURATION: Über Umgebungsvariablen steuerbar
+# Standard (Thesis): 100 Epochen
+EPOCHS = int(os.environ.get('EPOCHS', 100))
+BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 2048))
 
 DATA_PATH = '/data/preprocessed_retail_data.csv'
-MODEL_PATH = '/data/retail_model.keras'
-os.makedirs('/data', exist_ok=True)
+FINAL_MODEL_PATH = '/data/retail_model.h5'
+LOCAL_MODEL_PATH = '/tmp/retail_model.h5'
 
-# Pufferung deaktivieren für sofortige Logs
+os.makedirs('/data', exist_ok=True)
 sys.stdout.reconfigure(line_buffering=True)
 
-print("--- Phase 2: Modelltraining gestartet ---")
+print(f"--- Phase 2: Training (RAM-Safe) ---")
+print(f"Konfiguration: EPOCHS={EPOCHS}, BATCH_SIZE={BATCH_SIZE}")
 script_start_time = time.time()
 
-# GPU-Verfügbarkeit prüfen
+# GPU Setup
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
-    print(f"✅ TensorFlow GPU gefunden: {gpus[0]}")
-    try:
-        tf.config.experimental.set_memory_growth(gpus[0], True)
-    except RuntimeError as e:
-        print(e)
+    print(f"✅ GPU aktiv: {gpus[0]}")
+    try: tf.config.experimental.set_memory_growth(gpus[0], True)
+    except: pass
 else:
-    print("⚠ TensorFlow: Keine GPU gefunden, nutze CPU.")
+    print("⚠ Keine GPU, nutze CPU.")
 
 try:
-    if not os.path.exists(DATA_PATH):
-        raise FileNotFoundError(f"Daten nicht gefunden unter {DATA_PATH}")
+    if not os.path.exists(DATA_PATH): raise FileNotFoundError(DATA_PATH)
 
-    print(f"Lade vorverarbeitete Daten von {DATA_PATH}...")
-    # Begrenze Datenmenge für Tests, entferne nrows für Produktion
-    df = pd.read_csv(DATA_PATH, nrows=50000) 
-    print(f"Daten geladen. Shape: {df.shape}")
+    print("Lade Daten...", flush=True)
+    df = pd.read_csv(DATA_PATH)
+    # KEINE Vervielfachung -> RAM sicher
+    print(f"Datensatzgröße: {df.shape} (RAM sicher)")
 
-    # Zielvariable: Wurde mehr als 1 Artikel gekauft?
-    if 'Quantity' not in df.columns:
-        raise ValueError("Spalte 'Quantity' fehlt im Datensatz.")
-        
+    if 'Quantity' not in df.columns: raise ValueError("Quantity fehlt")
     df['PurchasedMultiple'] = (df['Quantity'] > 1).astype(int)
 
-    features = ['Price', 'Country']
-    target = 'PurchasedMultiple'
-    X = df[features]
-    y = df[target]
+    X = df[['Price', 'Country']]
+    y = df['PurchasedMultiple']
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', StandardScaler(), ['Price']),
-            ('cat', OneHotEncoder(handle_unknown='ignore'), ['Country'])
-        ])
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    print(f"Trainingsdaten: {X_train.shape}, Testdaten: {X_test.shape}")
-    
-    X_train_processed = preprocessor.fit_transform(X_train)
-    X_test_processed = preprocessor.transform(X_test)
-
-    if hasattr(X_train_processed, "toarray"):
-        print("Konvertiere Sparse Matrix zu Dense Array (Training)...")
-        X_train_processed = X_train_processed.toarray()
-    if hasattr(X_test_processed, "toarray"):
-        print("Konvertiere Sparse Matrix zu Dense Array (Test)...")
-        X_test_processed = X_test_processed.toarray()
-
-    print("Daten-Transformation abgeschlossen.")
-
-    print("Baue das Keras-Modell...")
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(X_train_processed.shape[1],)),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dropout(0.2),
-        tf.keras.layers.Dense(64, activation='relu'),
-        tf.keras.layers.Dense(1, activation='sigmoid')
+    print("Preprocessing...", flush=True)
+    preprocessor = ColumnTransformer(transformers=[
+        ('num', StandardScaler(), ['Price']),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), ['Country'])
     ])
 
-    model.compile(optimizer='adam',
-                  loss='binary_crossentropy',
-                  metrics=['accuracy'])
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+    X_train = preprocessor.fit_transform(X_train)
+    X_test = preprocessor.transform(X_test)
 
-    model.summary(print_fn=print)
+    # Sparse zu Dense (jetzt sicher, da Daten klein sind)
+    if hasattr(X_train, "toarray"): X_train = X_train.toarray()
+    if hasattr(X_test, "toarray"): X_test = X_test.toarray()
 
-    print("Starte Modelltraining...")
-    training_start_time = time.time()
+    print(f"Daten bereit.", flush=True)
 
-    model.fit(X_train_processed, y_train, 
-              epochs=5, 
-              batch_size=512, 
+    # Modell definieren
+    model = tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(X_train.shape[1],)),
+        tf.keras.layers.Dense(512, activation='relu'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.Dense(256, activation='relu'),
+        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+    print(f"Starte Training für {EPOCHS} Epochen...", flush=True)
+    training_start = time.time()
+    
+    model.fit(X_train, y_train, 
+              epochs=EPOCHS, 
+              batch_size=BATCH_SIZE, 
               validation_split=0.1, 
-              verbose=2)
+              verbose=2) 
 
-    training_duration = time.time() - training_start_time
-    print(f"Modelltraining abgeschlossen. Dauer: {training_duration:.2f} Sekunden.")
+    duration = time.time() - training_start
+    print(f"Training beendet. Dauer: {duration:.2f}s", flush=True)
 
-    print("Evaluiere Modell auf Testdaten...")
-    loss, accuracy = model.evaluate(X_test_processed, y_test, verbose=0)
-    print(f"Test-Genauigkeit: {accuracy:.4f}")
-
-    print(f"Speichere Modell nach {MODEL_PATH}...")
-    model.save(MODEL_PATH)
-    print("Modell erfolgreich gespeichert.")
+    # Workaround für NFS-Schreibprobleme
+    print(f"Speichere Modell lokal...", flush=True)
+    model.save(LOCAL_MODEL_PATH, save_format='h5')
+    print(f"Verschiebe auf NFS...", flush=True)
+    shutil.move(LOCAL_MODEL_PATH, FINAL_MODEL_PATH)
+    print("✅ Erfolg.", flush=True)
 
 except Exception as e:
-    # Schreibe Fehler explizit nach stderr
-    print(f"FATALER FEHLER in train.py: {e}", file=sys.stderr)
+    print(f"❌ FEHLER: {e}", file=sys.stderr)
     sys.exit(1)
 
-total_duration = time.time() - script_start_time
-print(f"Gesamtdauer des Skripts: {total_duration:.2f} Sekunden.")
-print("--- Modelltraining erfolgreich abgeschlossen ---")
+sys.exit(0)

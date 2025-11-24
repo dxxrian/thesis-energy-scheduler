@@ -1,0 +1,98 @@
+# ml-workflow/src/train.py
+import tensorflow as tf
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+import time
+import os
+import sys
+import shutil # NEU: Für das Verschieben der Datei
+
+# Konfiguration
+DATA_MULTIPLICATION_FACTOR = 10
+EPOCHS = 5 
+BATCH_SIZE = 2048
+
+DATA_PATH = '/data/preprocessed_retail_data.csv'
+# ZIEL-PFAD auf dem NFS
+FINAL_MODEL_PATH = '/data/retail_model.h5'
+# TEMP-PFAD im Container (lokal)
+LOCAL_MODEL_PATH = '/tmp/retail_model.h5'
+
+os.makedirs('/data', exist_ok=True)
+sys.stdout.reconfigure(line_buffering=True)
+
+print("--- Phase 2: Modelltraining gestartet ---")
+script_start_time = time.time()
+
+# ... (Hier bleibt alles gleich bis zum Speichern) ...
+# GPU Setup und Daten laden...
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try: tf.config.experimental.set_memory_growth(gpus[0], True)
+    except: pass
+
+try:
+    if not os.path.exists(DATA_PATH):
+        raise FileNotFoundError(f"Daten nicht gefunden unter {DATA_PATH}")
+
+    df_orig = pd.read_csv(DATA_PATH)
+    print(f"Vervielfache Datensatz um Faktor {DATA_MULTIPLICATION_FACTOR}...", flush=True)
+    df = pd.concat([df_orig] * DATA_MULTIPLICATION_FACTOR, ignore_index=True)
+    
+    if 'Quantity' not in df.columns: raise ValueError("Quantity fehlt")
+    df['PurchasedMultiple'] = (df['Quantity'] > 1).astype(int)
+
+    features = ['Price', 'Country']
+    X = df[features]
+    y = df['PurchasedMultiple']
+
+    preprocessor = ColumnTransformer(transformers=[
+        ('num', StandardScaler(), ['Price']),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), ['Country'])
+    ])
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+    X_train = preprocessor.fit_transform(X_train)
+    X_test = preprocessor.transform(X_test)
+
+    if hasattr(X_train, "toarray"): X_train = X_train.toarray()
+    if hasattr(X_test, "toarray"): X_test = X_test.toarray()
+
+    print("Baue Modell...", flush=True)
+    model = tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(X_train.shape[1],)),
+        tf.keras.layers.Dense(256, activation='relu'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+    print(f"Starte Training...", flush=True)
+    training_start_time = time.time()
+    model.fit(X_train, y_train, epochs=EPOCHS, batch_size=BATCH_SIZE, validation_split=0.1, verbose=2)
+    print(f"Training fertig. Dauer: {time.time() - training_start_time:.2f}s", flush=True)
+
+    # --- HIER IST DER FIX ---
+    # 1. Lokal speichern (vermeidet HDF5-NFS-Absturz)
+    print(f"Speichere Modell lokal nach {LOCAL_MODEL_PATH}...", flush=True)
+    # Wir nutzen explizit das alte Format, ignorieren Warnungen
+    model.save(LOCAL_MODEL_PATH, save_format='h5') 
+    
+    # 2. Datei auf das NFS verschieben
+    print(f"Verschiebe Modell nach {FINAL_MODEL_PATH}...", flush=True)
+    shutil.move(LOCAL_MODEL_PATH, FINAL_MODEL_PATH)
+    
+    print("✅ Modell erfolgreich gespeichert und übertragen.", flush=True)
+
+except Exception as e:
+    print(f"❌ FATALER FEHLER in train.py: {e}", file=sys.stderr, flush=True)
+    sys.exit(1)
+
+total_duration = time.time() - script_start_time
+print(f"Gesamtdauer des Skripts: {total_duration:.2f} Sekunden.", flush=True)
+
+# Expliziter Exit 0, um Segmentation Faults beim Python-Cleanup zuvorzukommen
+sys.exit(0)

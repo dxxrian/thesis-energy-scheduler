@@ -12,13 +12,13 @@ spec:
         app: ml-workflow
         workload-profile: "sequential"
       annotations:
-        scheduler.policy/performance-weight: "0.8"
+        scheduler.policy/performance-weight: "0.0"
     spec:
       schedulerName: my-energy-scheduler
       restartPolicy: Never
       containers:
       - name: preprocess
-        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v5
+        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v24
         command: ["python3", "preprocess.py"]
         volumeMounts:
         - name: data-storage

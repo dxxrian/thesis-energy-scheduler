@@ -1,0 +1,20 @@
+# debug-pvc.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-storage
+spec:
+  nodeName: tvpc           # <--- HIER: Erzwingt die Ausführung auf tvpc
+  restartPolicy: Never
+  containers:
+  - name: debugger
+    image: alpine:latest   # Kleines Image für schnellen Start
+    # Wir halten den Pod künstlich am Leben
+    command: ["/bin/sh", "-c", "sleep 3600"]
+    volumeMounts:
+    - name: data-storage
+      mountPath: /data
+  volumes:
+  - name: data-storage
+    persistentVolumeClaim:
+      claimName: ml-workflow-pvc

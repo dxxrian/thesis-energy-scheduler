@@ -1,0 +1,62 @@
+# ml-workflow/scripts/inference.py
+import tensorflow as tf
+import numpy as np
+import time
+import os
+import sys
+
+TOTAL_SAMPLES_TARGET = 20_000_000
+CHUNK_SIZE = 500_000
+
+MODEL_PATH = '/data/retail_model.h5'
+sys.stdout.reconfigure(line_buffering=True)
+
+print("--- Phase 3: Inferenz gestartet ---")
+script_start_time = time.time()
+
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    print(f"GPU gefunden: {gpus[0]}")
+    try: tf.config.experimental.set_memory_growth(gpus[0], True)
+    except: pass
+else:
+    print("Keine GPU, nutze CPU.")
+
+try:
+    if not os.path.exists(MODEL_PATH): raise FileNotFoundError(MODEL_PATH)
+    
+    print(f"Lade Modell...", flush=True)
+    model = tf.keras.models.load_model(MODEL_PATH)
+    input_shape = model.input_shape[1]
+    print(f"Modell bereit. Input: {input_shape}")
+
+    # Berechne Iterationen
+    iterations = int(TOTAL_SAMPLES_TARGET / CHUNK_SIZE)
+    print(f"Starte Inferenz. Ziel: {TOTAL_SAMPLES_TARGET} Vorhersagen in {iterations} Chunks.")
+
+    inference_start_time = time.time()
+    processed_count = 0
+
+    for i in range(iterations):
+        # 1. Daten Generieren (CPU Last)
+        data_chunk = np.random.rand(CHUNK_SIZE, input_shape).astype(np.float32)
+        
+        # 2. Vorhersagen (Inferenz Last)
+        _ = model.predict(data_chunk, batch_size=4096, verbose=0)
+        
+        processed_count += CHUNK_SIZE
+        
+        if (i+1) % 10 == 0:
+            elapsed = time.time() - inference_start_time
+            rate = processed_count / elapsed
+            print(f"   [{i+1}/{iterations}] {processed_count/1_000_000:.1f}M Samples | {elapsed:.1f}s | {rate:.0f} samples/s", flush=True)
+
+    total_inf_time = time.time() - inference_start_time
+    print(f"Inferenz fertig.")
+    print(f"Durchsatz: {TOTAL_SAMPLES_TARGET / total_inf_time:.0f} Samples/s")
+
+except Exception as e:
+    print(f"FATALER FEHLER: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"Gesamtdauer: {time.time() - script_start_time:.2f}s")

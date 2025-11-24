@@ -19,7 +19,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: train-gpu
-        image: 192.168.178.136:5000/ml-workflow-gpu:v2
+        image: 192.168.178.136:5000/ml-workflow-gpu:v24
         command: ["python3", "train.py"]
         resources:
           limits:

@@ -23,11 +23,11 @@ echo "System- und Projektstatus wird in die Datei '$OUTPUT_FILE' geschrieben..."
 log_header "1. Systeminformationen (Hardware & OS) des Master-Knotens"
 {
     echo "### CPU-Informationen:"
-    lscpu
+    lscpu | grep -E 'Architecture|Model name|CPU\(s\):|Thread|Core|Socket'
     echo -e "\n### Arbeitsspeicher:"
     free -h
     echo -e "\n### Festplattennutzung:"
-    df -h
+    df -h | grep -E 'Filesystem|/$|/data'
     echo -e "\n### Betriebssystem-Version:"
     hostnamectl
     echo -e "\n### Grafikkarten-Informationen:"
@@ -38,26 +38,32 @@ log_header "1. Systeminformationen (Hardware & OS) des Master-Knotens"
 # --- 2. Kubernetes Cluster-Status ---
 log_header "2. Kubernetes Cluster-Status"
 {
-    echo "### Kubernetes-Versionen (Client & Server):"
-    kubectl version
+    echo "### Kubernetes-Versionen:"
+    kubectl version --short 2>/dev/null || kubectl version
     echo -e "\n### Cluster-Knoten (Nodes):"
     kubectl get nodes -o wide --show-labels
-    echo -e "\n### VERBESSERT: GPU-Ressourcen auf tvpc:"
-    kubectl describe node tvpc | grep nvidia.com/gpu || echo "Keine 'nvidia.com/gpu' Ressource auf tvpc gefunden."
-    echo -e "\n### Alle Ressourcen (Pods, Services, Deployments etc.) in allen Namespaces:"
-    kubectl get all --all-namespaces -o wide
+    
+    echo -e "\n### Speicher-Status (PV & PVC) [WICHTIG FÜR ML-WORKFLOW]:"
+    kubectl get pv,pvc -A
+    
+    echo -e "\n### GPU-Ressourcen auf tvpc:"
+    kubectl describe node tvpc | grep -A 5 "Capacity:" | grep "nvidia.com/gpu" || echo "Keine 'nvidia.com/gpu' Ressource auf tvpc gefunden."
+    
+    echo -e "\n### Alle Pods im Default Namespace:"
+    kubectl get pods -n default -o wide
 } >> "$OUTPUT_FILE" 2>&1
 
 
 # --- 3. Containerd & Registry-Status ---
 log_header "3. Containerd & Registry-Status auf dem Master-Knoten"
 {
-    echo "### VERBESSERT: Status des Registry systemd Service:"
-    sudo systemctl status k3s-local-registry.service
-    echo -e "\n### Alle Container (laufend und gestoppt):"
-    sudo nerdctl --address /run/k3s/containerd/containerd.sock ps -a
-    echo -e "\n### Lokale Container-Images:"
-    sudo nerdctl --address /run/k3s/containerd/containerd.sock images
+    echo "### Status des Registry systemd Service:"
+    sudo systemctl is-active k3s-local-registry.service
+    
+    echo -e "\n### Projekt-Spezifische Images (Golden Master v1 Check):"
+    # Wir filtern hier speziell nach unseren Images, um Übersichtlichkeit zu wahren
+    sudo nerdctl --address /run/k3s/containerd/containerd.sock images | grep -E "ml-workflow|energy-monitor" | sort
+    
     echo -e "\n### Katalog der lokalen Registry (127.0.0.1:5000):"
     curl -s http://127.0.0.1:5000/v2/_catalog || echo "Registry unter http://127.0.0.1:5000 nicht erreichbar."
 } >> "$OUTPUT_FILE" 2>&1
@@ -75,7 +81,6 @@ log_header "4. Scheduler-Implementierung & Konfiguration"
     fi
 
     echo -e "\n\n### Deployment-Konfigurationen des Schedulers:"
-    # Explizit die relevanten Dateien aus dem k8s-Verzeichnis anzeigen
     for file in scheduler-plugin/k8s/*.yaml; do
         echo -e "\n--- Inhalt von: $file ---"
         cat "$file"
@@ -87,16 +92,14 @@ log_header "4. Scheduler-Implementierung & Konfiguration"
 # --- 5. Baseline- & Benchmark-Konfigurationen ---
 log_header "5. Baseline- & Benchmark-Konfigurationen"
 {
-    echo "Dieser Abschnitt zeigt die Konfigurationen und Skripte, die zur Erhebung der Leistungsdaten (Baselines) verwendet werden, sowie die Wissensdatenbank des Schedulers."
-
-    echo -e "\n### Wissensdatenbank des Schedulers (Leistungsdaten):"
+    echo "### Wissensdatenbank des Schedulers (ConfigMap):"
     kubectl get configmap scheduler-knowledge-base -n kube-system -o yaml
 
     echo -e "\n\n--- Verzeichnis: benchmarks ---"
-    echo "### Dateiliste:"
     ls -l "benchmarks"
-    # Findet alle Dateien in 'benchmarks', ignoriert Git/Cache
-    find "benchmarks" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" | while read -r file; do
+    # Filtert Binärdateien und Git-Ordner
+    find "benchmarks" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" \
+        ! -name "*.zip" ! -name "*.whl" ! -name "*.h5" ! -name "*.keras" ! -name "*.pyc" | while read -r file; do
         echo -e "\n--- Inhalt von: $file ---"
         cat "$file"
         echo -e "\n--- Ende von: $file ---\n"
@@ -108,9 +111,9 @@ log_header "5. Baseline- & Benchmark-Konfigurationen"
 log_header "6. Energy-Monitor Implementierung"
 {
     echo -e "\n\n--- Verzeichnis: energy-monitor ---"
-    echo "### Dateiliste:"
     ls -l "energy-monitor"
-    find "energy-monitor" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" | while read -r file; do
+    find "energy-monitor" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" \
+        ! -name "*.zip" ! -name "*.whl" ! -name "*.h5" ! -name "*.keras" ! -name "*.pyc" | while read -r file; do
         echo -e "\n--- Inhalt von: $file ---"
         cat "$file"
         echo -e "\n--- Ende von: $file ---\n"
@@ -118,13 +121,17 @@ log_header "6. Energy-Monitor Implementierung"
 } >> "$OUTPUT_FILE" 2>&1
 
 
-# --- 7. ML-Workflow Implementierung (NEU) ---
+# --- 7. ML-Workflow Implementierung (NEU & SAFE) ---
 log_header "7. ML-Workflow Implementierung"
 {
     echo -e "\n\n--- Verzeichnis: ml-workflow ---"
-    echo "### Dateiliste:"
-    ls -l "ml-workflow"
-    find "ml-workflow" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" | while read -r file; do
+    echo "### Dateiliste (inkl. Binärdateien):"
+    ls -lh "ml-workflow"
+    
+    echo -e "\n### Datei-Inhalte (Binärdateien wie .zip, .whl, .h5 werden übersprungen):"
+    # WICHTIG: Ausschluss von großen Binärdateien
+    find "ml-workflow" -type f -not -path "*/.git/*" -not -path "*/__pycache__/*" -not -path "*/nfs/*" \
+        ! -name "*.zip" ! -name "*.whl" ! -name "*.h5" ! -name "*.keras" ! -name "*.pyc" | while read -r file; do
         echo -e "\n--- Inhalt von: $file ---"
         cat "$file"
         echo -e "\n--- Ende von: $file ---\n"
@@ -138,10 +145,10 @@ failing_pods=$(kubectl get pods --all-namespaces | grep -v -E "Running|Completed
 log_header "8. Diagnose für fehlerhafte oder wartende Pods"
 {
 if [ -z "$failing_pods" ]; then
-    echo "✅ Alle Pods sind im Status 'Running' oder 'Completed'. Keine Probleme gefunden." | tee -a "$OUTPUT_FILE"
+    echo "✅ Alle Pods sind im Status 'Running' oder 'Completed'. Keine Probleme gefunden."
 else
-    echo "⚠ Probleme bei folgenden Pods gefunden. 'kubectl describe' wird ausgeführt:" | tee -a "$OUTPUT_FILE"
-    echo "$failing_pods" | tee -a "$OUTPUT_FILE"
+    echo "⚠ Probleme bei folgenden Pods gefunden. 'kubectl describe' wird ausgeführt:"
+    echo "$failing_pods"
     
     echo "$failing_pods" | while read -r line; do
         if [ -n "$line" ]; then
@@ -168,12 +175,12 @@ log_header "9. Laufzeit-Status des Custom Schedulers (my-energy-scheduler)"
         echo "❌ Custom Scheduler Pod wurde nicht gefunden oder läuft nicht."
     fi
 
-    echo -e "\n\n### Kürzliche Scheduling-Entscheidungen von 'my-energy-scheduler':"
-    kubectl get events --all-namespaces --field-selector reportingComponent=my-energy-scheduler || echo "Keine Scheduling-Events vom Custom Scheduler gefunden."
+    echo -e "\n\n### Kürzliche Scheduling-Entscheidungen (Events):"
+    kubectl get events --all-namespaces --field-selector reportingComponent=my-energy-scheduler --sort-by='.lastTimestamp' | tail -n 20 || echo "Keine Events gefunden."
 
 } >> "$OUTPUT_FILE" 2>&1
 
-# --- 10. Git-Repository-Status (NEU) ---
+# --- 10. Git-Repository-Status ---
 log_header "10. Git-Repository-Status"
 {
     echo "### Git Remote (Backup-Status):"
@@ -182,8 +189,6 @@ log_header "10. Git-Repository-Status"
     git status
     echo -e "\n### Letzte 10 Commits:"
     git log --oneline --graph -n 10
-    echo -e "\n### Vorhandene Tags (Versionen):"
-    git tag
 } >> "$OUTPUT_FILE" 2>&1
 
 
