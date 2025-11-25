@@ -9,23 +9,20 @@ import os
 import sys
 import shutil
 
-# KONFIGURATION: Über Umgebungsvariablen steuerbar
-# Standard (Thesis): 100 Epochen
+# KONFIGURATION
 EPOCHS = int(os.environ.get('EPOCHS', 100))
 BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 2048))
 
-DATA_PATH = '/data/preprocessed_retail_data.csv'
-FINAL_MODEL_PATH = '/data/retail_model.h5'
+# Pfade
+NFS_DATA_PATH = '/data/preprocessed_retail_data.csv'
+LOCAL_DATA_PATH = '/tmp/training_data.csv' # Wir kopieren hierhin
+NFS_MODEL_PATH = '/data/retail_model.h5'
 LOCAL_MODEL_PATH = '/tmp/retail_model.h5'
 
-os.makedirs('/data', exist_ok=True)
-sys.stdout.reconfigure(line_buffering=True)
-
-print(f"--- Phase 2: Training (RAM-Safe) ---")
-print(f"Konfiguration: EPOCHS={EPOCHS}, BATCH_SIZE={BATCH_SIZE}")
+print(f"--- Phase 2: Training (Optimized I/O) ---")
 script_start_time = time.time()
 
-# GPU Setup
+# GPU Check
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
     print(f"✅ GPU aktiv: {gpus[0]}")
@@ -35,12 +32,14 @@ else:
     print("⚠ Keine GPU, nutze CPU.")
 
 try:
-    if not os.path.exists(DATA_PATH): raise FileNotFoundError(DATA_PATH)
+    if not os.path.exists(NFS_DATA_PATH): raise FileNotFoundError(NFS_DATA_PATH)
 
-    print("Lade Daten...", flush=True)
-    df = pd.read_csv(DATA_PATH)
-    # KEINE Vervielfachung -> RAM sicher
-    print(f"Datensatzgröße: {df.shape} (RAM sicher)")
+    # SCHRITT 1: Daten vom langsamen NFS auf schnelle lokale Disk kopieren
+    print("Kopiere Daten von NFS nach lokal (/tmp)...", flush=True)
+    shutil.copy(NFS_DATA_PATH, LOCAL_DATA_PATH)
+
+    print("Lade lokale Daten...", flush=True)
+    df = pd.read_csv(LOCAL_DATA_PATH)
 
     if 'Quantity' not in df.columns: raise ValueError("Quantity fehlt")
     df['PurchasedMultiple'] = (df['Quantity'] > 1).astype(int)
@@ -58,11 +57,8 @@ try:
     X_train = preprocessor.fit_transform(X_train)
     X_test = preprocessor.transform(X_test)
 
-    # Sparse zu Dense (jetzt sicher, da Daten klein sind)
     if hasattr(X_train, "toarray"): X_train = X_train.toarray()
     if hasattr(X_test, "toarray"): X_test = X_test.toarray()
-
-    print(f"Daten bereit.", flush=True)
 
     # Modell definieren
     model = tf.keras.Sequential([
@@ -76,26 +72,21 @@ try:
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
     print(f"Starte Training für {EPOCHS} Epochen...", flush=True)
-    training_start = time.time()
-    
-    model.fit(X_train, y_train, 
-              epochs=EPOCHS, 
-              batch_size=BATCH_SIZE, 
-              validation_split=0.1, 
-              verbose=2) 
+    model.fit(X_train, y_train, epochs=EPOCHS, batch_size=BATCH_SIZE, validation_split=0.1, verbose=2)
 
-    duration = time.time() - training_start
-    print(f"Training beendet. Dauer: {duration:.2f}s", flush=True)
-
-    # Workaround für NFS-Schreibprobleme
+    # SCHRITT 2: Modell lokal speichern und dann verschieben
     print(f"Speichere Modell lokal...", flush=True)
     model.save(LOCAL_MODEL_PATH, save_format='h5')
-    print(f"Verschiebe auf NFS...", flush=True)
-    shutil.move(LOCAL_MODEL_PATH, FINAL_MODEL_PATH)
+    
+    print(f"Verschiebe Modell auf NFS...", flush=True)
+    shutil.move(LOCAL_MODEL_PATH, NFS_MODEL_PATH)
+    
     print("✅ Erfolg.", flush=True)
 
 except Exception as e:
     print(f"❌ FEHLER: {e}", file=sys.stderr)
     sys.exit(1)
 
+# Cleanup lokal
+if os.path.exists(LOCAL_DATA_PATH): os.remove(LOCAL_DATA_PATH)
 sys.exit(0)

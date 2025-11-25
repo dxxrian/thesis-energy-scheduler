@@ -1,14 +1,13 @@
 // staging/src/k8s.io/myenergyplugin/myenergyplugin.go
 package myenergyplugin
 
-// KORRIGIERT: Zusätzliche Imports für JSON und strukturierteres Logging
 import (
 	"context"
-	"encoding/json" // Neu für JSON-Ausgaben
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,7 +19,6 @@ import (
 )
 
 const Name = "EnergyScorer"
-// NEU: Ein Schlüssel zum Speichern der Maxima im CycleState
 const preScoreStateKey framework.StateKey = "EnergyScorerPreScore"
 
 type NodeProfile struct {
@@ -32,310 +30,145 @@ type NodeProfile struct {
 
 type ProfileData map[string][]NodeProfile
 
-// NEU: Diese Struktur speichert die Maxima für den Normalisierungs-Prozess
 type preScoreState struct {
+	targetProfile  []NodeProfile
 	maxPerformance float64
 	maxEfficiency  float64
 }
 
-// Clone implementiert die framework.StateData-Schnittstelle
-func (s *preScoreState) Clone() framework.StateData {
-	return &preScoreState{
-		maxPerformance: s.maxPerformance,
-		maxEfficiency:  s.maxEfficiency,
-	}
-}
-
+func (s *preScoreState) Clone() framework.StateData { return s }
 
 type EnergyScorer struct {
-	handle    framework.Handle
-	clientset *kubernetes.Clientset
+	handle       framework.Handle
+	clientset    *kubernetes.Clientset
+	profileCache ProfileData
+	cacheMutex   sync.RWMutex
 }
 
-// NEU: Wir implementieren jetzt PreScorePlugin und ScorePlugin
 var _ framework.PreScorePlugin = &EnergyScorer{}
 var _ framework.ScorePlugin = &EnergyScorer{}
 
 func New(_ runtime.Object, h framework.Handle) (framework.Plugin, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, fmt.Errorf("fehler bei der erstellung der in-cluster config: %v", err)
+		return nil, fmt.Errorf("failed to create in-cluster config: %v", err)
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, fmt.Errorf("fehler bei der erstellung des clientsets: %v", err)
+		return nil, fmt.Errorf("failed to create clientset: %v", err)
 	}
-	return &EnergyScorer{
-		handle:    h,
-		clientset: clientset,
-	}, nil
+	return &EnergyScorer{handle: h, clientset: clientset}, nil
 }
 
-func (es *EnergyScorer) Name() string {
-	return Name
-}
+func (es *EnergyScorer) Name() string { return Name }
+func (es *EnergyScorer) ScoreExtensions() framework.ScoreExtensions { return nil }
 
-// ScoreExtensions ist die neue, erforderliche Methode. Wir geben nil zurück.
-func (es *EnergyScorer) ScoreExtensions() framework.ScoreExtensions {
-	return nil
-}
-
-// VERBESSERT: Eine Struktur für unser strukturiertes Logging
-type ScoreLogEntry struct {
-	Level             string  `json:"level"` // "info", "warn", "error"
-	PodName           string  `json:"podName"`
-	PodNamespace      string  `json:"podNamespace"`
-	NodeName          string  `json:"nodeName"`
-	Message           string  `json:"message"`
-	WorkloadProfile   string  `json:"workloadProfile,omitempty"`
-	IsGpuPod          bool    `json:"isGpuPod,omitempty"`
-	PerformanceWeight float64 `json:"performanceWeight,omitempty"`
-	// Profil-Werte
-	ProfilePerformance      float64 `json:"profilePerformance,omitempty"`
-	ProfilePowerConsumption float64 `json:"profilePowerConsumption,omitempty"`
-	ProfileIdlePower        float64 `json:"profileIdlePower,omitempty"`
-	CalculatedEfficiency    float64 `json:"calculatedEfficiency,omitempty"`
-	// NEU: Normalisierte Werte für faires Scoring
-	NormPerformance    float64 `json:"normPerformance,omitempty"`
-	NormEfficiency     float64 `json:"normEfficiency,omitempty"`
-	// Berechnete Werte
-	RawScore           float64 `json:"rawScore,omitempty"`
-	FinalScore         int64   `json:"finalScore"` // FinalScore wird immer geloggt
-}
-
-// Private Hilfsfunktion zum Loggen
-func logJSON(entry ScoreLogEntry) {
-	logData, err := json.Marshal(entry)
-	if err != nil {
-		log.Printf("FATAL: could not marshal log entry: %v", err)
-		return
+func (es *EnergyScorer) getProfiles(ctx context.Context) (ProfileData, error) {
+	es.cacheMutex.RLock()
+	if es.profileCache != nil {
+		defer es.cacheMutex.RUnlock()
+		return es.profileCache, nil
 	}
-	log.Println(string(logData))
-}
+	es.cacheMutex.RUnlock()
 
-// #############################################################################
-// NEUE FUNKTION: PreScore (Wird einmal pro Pod ausgeführt)
-// #############################################################################
-// PreScore ermittelt die clusterweiten Maxima für Leistung und Effizienz,
-// um die Werte in der Score-Phase normalisieren zu können.
-func (es *EnergyScorer) PreScore(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodes []*v1.Node) *framework.Status {
-	// 1. Profil des Pods holen
-	workloadProfile, ok := p.Labels["workload-profile"]
-	if !ok {
-		// Kein Profil, wir können nichts tun.
-		return framework.NewStatus(framework.Success)
-	}
-
-	// 2. ConfigMap laden
 	cm, err := es.clientset.CoreV1().ConfigMaps("kube-system").Get(ctx, "scheduler-knowledge-base", metav1.GetOptions{})
 	if err != nil {
-		return framework.NewStatus(framework.Error, fmt.Sprintf("Failed to load ConfigMap 'scheduler-knowledge-base': %v", err))
+		return nil, err
 	}
-
-	// 3. YAML parsen
-	profilesContent := cm.Data["profiles.yaml"]
 	var profiles ProfileData
-	if err := yaml.Unmarshal([]byte(profilesContent), &profiles); err != nil {
-		return framework.NewStatus(framework.Error, fmt.Sprintf("Failed to parse YAML profiles: %v", err))
+	if err := yaml.Unmarshal([]byte(cm.Data["profiles.yaml"]), &profiles); err != nil {
+		return nil, err
 	}
+	es.cacheMutex.Lock()
+	es.profileCache = profiles
+	es.cacheMutex.Unlock()
+	return profiles, nil
+}
 
-	// 4. Korrekte Profil-Liste holen
-	nodeProfiles, profileExists := profiles[workloadProfile]
-	if !profileExists {
+func (es *EnergyScorer) PreScore(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodes []*v1.Node) *framework.Status {
+	workloadProfileName, ok := p.Labels["workload-profile"]
+	if !ok {
+		return framework.NewStatus(framework.Success)
+	}
+	profiles, err := es.getProfiles(ctx)
+	if err != nil {
+		return framework.NewStatus(framework.Success)
+	}
+	nodeProfiles, exists := profiles[workloadProfileName]
+	if !exists {
 		return framework.NewStatus(framework.Success)
 	}
 
-	// 5. Maxima im Cluster finden
 	maxP := 0.0
 	maxE := 0.0
-
 	for _, np := range nodeProfiles {
-		// Finde max. Performance
 		if np.PerformanceRate > maxP {
 			maxP = np.PerformanceRate
 		}
-
-		// Berechne Effizienz und finde max. Effizienz
 		powerDelta := np.PowerConsumptionWatts - np.IdlePowerWatts
 		if powerDelta <= 0 {
 			powerDelta = 1
 		}
-		sEff := np.PerformanceRate / powerDelta
-		if sEff > maxE {
-			maxE = sEff
+		eff := np.PerformanceRate / powerDelta
+		if eff > maxE {
+			maxE = eff
 		}
 	}
+	if maxP == 0 { maxP = 1 }
+	if maxE == 0 { maxE = 1 }
 
-	// Division durch 0 verhindern, falls Profile leer oder 0 sind
-	if maxP == 0 {
-		maxP = 1.0
-	}
-	if maxE == 0 {
-		maxE = 1.0
-	}
-
-	// 6. Maxima im CycleState für die Score-Phase speichern
-	stateData := &preScoreState{
-		maxPerformance: maxP,
-		maxEfficiency:  maxE,
-	}
-	state.Write(preScoreStateKey, stateData)
-
+	s := &preScoreState{targetProfile: nodeProfiles, maxPerformance: maxP, maxEfficiency: maxE}
+	state.Write(preScoreStateKey, s)
 	return framework.NewStatus(framework.Success)
 }
 
-// #############################################################################
-// ANGEPASSTE FUNKTION: Score (Wird einmal pro Pod PRO KNOTEN ausgeführt)
-// #############################################################################
 func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) (int64, *framework.Status) {
-
-	// Basis-Log-Eintrag vorbereiten
-	baseEntry := ScoreLogEntry{
-		Level:        "info",
-		PodName:      p.Name,
-		PodNamespace: p.Namespace,
-		NodeName:     nodeName,
-	}
-
-	workloadProfile, ok := p.Labels["workload-profile"]
-	if !ok {
-		baseEntry.Level = "warn"
-		baseEntry.Message = "Pod has no 'workload-profile' label, skipping scoring."
-		baseEntry.FinalScore = 0
-		logJSON(baseEntry)
-		return 0, framework.NewStatus(framework.Success)
-	}
-	baseEntry.WorkloadProfile = workloadProfile
-
-	// NEU: Lade Maxima aus der PreScore-Phase
 	data, err := state.Read(preScoreStateKey)
 	if err != nil {
-		// Das sollte nicht passieren, wenn PreScore erfolgreich war und ein Profil existiert
-		baseEntry.Level = "error"
-		baseEntry.Message = "Failed to read preScoreState from cycle state."
-		baseEntry.FinalScore = 0
-		logJSON(baseEntry)
-		return 0, framework.NewStatus(framework.Error, err.Error())
-	}
-
-	preScoreData := data.(*preScoreState)
-	maxP := preScoreData.maxPerformance
-	maxE := preScoreData.maxEfficiency
-
-	// Lade ConfigMap (wird vom Framework gecacht, also kein großer Overhead)
-	cm, err := es.clientset.CoreV1().ConfigMaps("kube-system").Get(ctx, "scheduler-knowledge-base", metav1.GetOptions{})
-	if err != nil {
-		baseEntry.Level = "error"
-		baseEntry.Message = fmt.Sprintf("Failed to load ConfigMap 'scheduler-knowledge-base': %v", err)
-		baseEntry.FinalScore = 0
-		logJSON(baseEntry)
-		return 0, framework.NewStatus(framework.Error, err.Error())
-	}
-
-	profilesContent := cm.Data["profiles.yaml"]
-	var profiles ProfileData
-	if err := yaml.Unmarshal([]byte(profilesContent), &profiles); err != nil {
-		baseEntry.Level = "error"
-		baseEntry.Message = fmt.Sprintf("Failed to parse YAML profiles: %v", err)
-		baseEntry.FinalScore = 0
-		logJSON(baseEntry)
-		return 0, framework.NewStatus(framework.Error, err.Error())
-	}
-
-	nodeProfiles, profileExists := profiles[workloadProfile]
-	if !profileExists {
-		// Sollte von PreScore abgefangen werden, aber sicher ist sicher
-		baseEntry.Level = "warn"
-		baseEntry.Message = fmt.Sprintf("Profile '%s' not found in knowledge base.", workloadProfile)
-		baseEntry.FinalScore = 0
-		logJSON(baseEntry)
 		return 0, framework.NewStatus(framework.Success)
 	}
+	psState := data.(*preScoreState)
 
-	// Logik zur GPU-Erkennung
-	isGpuPod := false
-	for _, container := range p.Spec.Containers {
-		if _, ok := container.Resources.Limits["nvidia.com/gpu"]; ok {
-			isGpuPod = true
-			break
-		}
-	}
-	baseEntry.IsGpuPod = isGpuPod
-
-	var expectedNodeNameSuffix string
-	if isGpuPod {
-		expectedNodeNameSuffix = "-gpu"
-	} else {
-		expectedNodeNameSuffix = "-cpu"
-	}
-
-	// Finde das spezifische Profil für DIESEN Knoten
-	var targetNodeProfile *NodeProfile
-	for i, np := range nodeProfiles {
-		if strings.HasPrefix(np.NodeName, nodeName) && strings.HasSuffix(np.NodeName, expectedNodeNameSuffix) {
-			targetNodeProfile = &nodeProfiles[i]
-			break
+	// Gewichtung
+	wPerf := 0.5
+	if wStr, ok := p.Annotations["scheduler.policy/performance-weight"]; ok {
+		if w, err := strconv.ParseFloat(wStr, 64); err == nil {
+			wPerf = w
 		}
 	}
 
-	if targetNodeProfile == nil {
-		baseEntry.Level = "info"
-		baseEntry.Message = fmt.Sprintf("No matching profile found for node with suffix '%s'.", expectedNodeNameSuffix)
-		baseEntry.FinalScore = 0
-		logJSON(baseEntry)
-		return 0, framework.NewStatus(framework.Success)
+	var bestScore float64 = 0
+    // Wir iterieren über ALLE Profile in der Liste.
+    // Wenn eines zum aktuellen Node passt (z.B. "tvpc-gpu" passt zu Node "tvpc"), berechnen wir es.
+	for _, np := range psState.targetProfile {
+        // Passt das Profil zu diesem Node? (String contains check)
+        // "tvpc-cpu" enthält "tvpc" -> MATCH
+        // "tvpc-gpu" enthält "tvpc" -> MATCH
+        // "rpi-cpu" enthält "tvpc" -> NO MATCH
+		if strings.Contains(np.NodeName, nodeName) {
+			
+            // Berechnung
+			powerDelta := np.PowerConsumptionWatts - np.IdlePowerWatts
+			if powerDelta <= 0 { powerDelta = 1 }
+			eff := np.PerformanceRate / powerDelta
+
+			normPerf := (np.PerformanceRate / psState.maxPerformance) * 100.0
+			normEff := (eff / psState.maxEfficiency) * 100.0
+			
+			finalScore := (wPerf * normPerf) + ((1 - wPerf) * normEff)
+
+			// Logging für Analyse (JSON)
+            // Wir loggen JEDEN Treffer, damit das Skript sie alle sammeln kann
+			logMsg := fmt.Sprintf(`{"pod": "%s", "node": "%s", "variant": "%s", "score": %d, "perf": %.1f, "eff": %.1f, "weight": %.1f}`, 
+                p.Name, nodeName, np.NodeName, int64(finalScore), normPerf, normEff, wPerf)
+			log.Println(logMsg)
+
+            // Wir nehmen für den Scheduler den BESTEN Wert, den dieser Node bieten kann
+			if finalScore > bestScore {
+				bestScore = finalScore
+			}
+		}
 	}
 
-	// Lade Benutzergewichtung
-	wPerfStr, ok := p.Annotations["scheduler.policy/performance-weight"]
-	if !ok {
-		wPerfStr = "0.5"
-	}
-	wPerf, _ := strconv.ParseFloat(wPerfStr, 64)
-	baseEntry.PerformanceWeight = wPerf
-
-	// Berechne Effizienz für DIESEN Knoten
-	powerDelta := targetNodeProfile.PowerConsumptionWatts - targetNodeProfile.IdlePowerWatts
-	if powerDelta <= 0 {
-		powerDelta = 1
-	}
-	sEff := targetNodeProfile.PerformanceRate / powerDelta
-
-	// #####################################################################
-	// NEUE NORMALISIERTE SCORING-LOGIK
-	// #####################################################################
-
-	// Normalisiere beide Werte auf eine Skala von 0-100
-	normPerformance := (targetNodeProfile.PerformanceRate / maxP) * 100.0
-	normEfficiency := (sEff / maxE) * 100.0
-
-	// Die Skalierung mit 10.0 ist nicht mehr nötig, da beide Werte normalisiert sind
-	finalScoreFloat := (wPerf * normPerformance) + ((1 - wPerf) * normEfficiency)
-
-	// #####################################################################
-
-	score := int64(finalScoreFloat)
-	// Skaliere den Score (0-100) auf den von K8s erwarteten Bereich
-	if score < framework.MinNodeScore {
-		score = framework.MinNodeScore
-	}
-	if score > framework.MaxNodeScore {
-		// Da unser Max-Score 100 ist, setzen wir ihn auf MaxNodeScore (was 100 ist)
-		score = framework.MaxNodeScore
-	}
-
-	// Alle finalen Informationen in den Log-Eintrag füllen
-	baseEntry.Message = "Node successfully scored."
-	baseEntry.ProfilePerformance = targetNodeProfile.PerformanceRate
-	baseEntry.ProfilePowerConsumption = targetNodeProfile.PowerConsumptionWatts
-	baseEntry.ProfileIdlePower = targetNodeProfile.IdlePowerWatts
-	baseEntry.CalculatedEfficiency = sEff
-	baseEntry.NormPerformance = normPerformance // Für Debugging
-	baseEntry.NormEfficiency = normEfficiency   // Für Debugging
-	baseEntry.RawScore = finalScoreFloat
-	baseEntry.FinalScore = score
-
-	logJSON(baseEntry)
-
-	return score, framework.NewStatus(framework.Success)
+	return int64(bestScore), framework.NewStatus(framework.Success)
 }

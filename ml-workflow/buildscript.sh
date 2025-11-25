@@ -8,7 +8,7 @@ sleep 3
 
 REGISTRY_IP_PORT="192.168.178.136:5000"
 NERD_ADDR="--address /run/k3s/containerd/containerd.sock -n k8s.io"
-TAG="v24"
+TAG="v25"
 
 echo "--- Starte Build-Prozess für Tag: $TAG ---"
 
