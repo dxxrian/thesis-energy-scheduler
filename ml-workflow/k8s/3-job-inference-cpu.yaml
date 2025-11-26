@@ -18,7 +18,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: inference-cpu
-        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v24
+        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v26
         command: ["python3", "inference.py"]
         env:
         - name: TOTAL_SAMPLES

@@ -1,0 +1,13 @@
+Timestamp,Weight,Job,Node,Duration,AvgWatts,Joules
+2025-11-25T10:51:18,1.0,preprocess-job,tvpc,65,76.23,4954.95
+2025-11-25T10:51:18,1.0,train-job,tvpc,29,108.51,3146.79
+2025-11-25T10:51:18,1.0,inference-job,tvpc,87,94.85,8251.95
+2025-11-25T11:11:41,1.0,preprocess-job,tvpc,64,77.66,4970.24
+2025-11-25T11:11:41,1.0,train-job,tvpc,29,105.01,3045.29
+2025-11-25T11:11:41,1.0,inference-job,tvpc,90,95.82,8623.80
+2025-11-25T11:21:06,0.1,preprocess-job,dgoh-wyze,110,5.36,589.60
+2025-11-25T11:21:06,0.1,train-job,tvpc,29,109.52,3176.08
+2025-11-25T11:21:06,0.1,inference-job,tvpc,89,94.50,8410.50
+2025-11-26T11:40:55,0.5,preprocess-job,dgoh-wyze,113,5.29,597.77
+2025-11-26T11:40:55,0.5,train-job,tvpc,35,99.57,3484.95
+2025-11-26T11:40:55,0.5,inference-job,tvpc,88,93.80,8254.40

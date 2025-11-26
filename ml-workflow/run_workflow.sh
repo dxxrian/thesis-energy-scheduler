@@ -9,6 +9,7 @@ declare -A STATS_DURATION
 declare -A STATS_AVG_POWER
 declare -A STATS_JOULES
 PERF_WEIGHT=${1:-"0.5"}
+RESULTS_FILE="thesis_results.csv"
 
 # --- Colors ---
 GREEN='\033[0;32m'
@@ -34,6 +35,11 @@ monitor_job() {
     local job_yaml=$2
     
     log_header "JOB: $job_name"
+    
+    # Cooldown für saubere Messung
+    log_info "Cooldown (10s)..."
+    sleep 10
+    
     log_info "Sende Job an Kubernetes..."
     echo "$job_yaml" | kubectl apply -f - >/dev/null
     
@@ -63,14 +69,13 @@ monitor_job() {
     log_success "Entscheidung: $node_name"
     STATS_NODES[$job_name]=$node_name
 
-    # 3. Scheduler Scoreboard (Fixed Parsing)
+    # 3. Scheduler Scoreboard
     echo -e "${CYAN}--- Scheduling Scoreboard ---${NC}"
     printf "%-15s | %-15s | %-5s | %-6s | %-6s\n" "Node" "Variant" "Score" "Perf." "Eff."
     echo "----------------------------------------------------------------"
     
     local scheduler_pod=$(kubectl get pods -n kube-system -l app=my-energy-scheduler -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     if [ -n "$scheduler_pod" ]; then
-        # Robustere Log-Extraktion: Nur Zeilen mit JSON-Klammern, Zeitstempel entfernen
         kubectl logs -n kube-system $scheduler_pod --since=120s 2>/dev/null \
         | grep "$pod_name" \
         | grep "variant" \
@@ -87,8 +92,7 @@ monitor_job() {
     fi
     echo "----------------------------------------------------------------"
 
-    # 4. Live Monitoring & Energy Calculation
-    # Wir schreiben Metriken in eine temporäre Datei, um sie später auszuwerten
+    # 4. Live Monitoring
     METRIC_FILE="/tmp/metrics_$job_name.txt"
     rm -f $METRIC_FILE
 
@@ -110,10 +114,7 @@ monitor_job() {
                 GPU_USAGE="| GPU: ${GPU_UTIL}%"
             fi
             
-            # Energie lesen
             ENERGY=$(kubectl get node $node_name -o jsonpath='{.metadata.annotations.energy\.thesis\.io/current-watts}' 2>/dev/null || echo "0")
-            
-            # In Datei schreiben für Durchschnittsberechnung
             echo "$ENERGY" >> $METRIC_FILE
             
             echo -e "   ⚡ $TS | $node_name | CPU: ${CPU_CORES} | RAM: $RAW_RAM $GPU_USAGE | Power: ${ENERGY} W"
@@ -122,44 +123,34 @@ monitor_job() {
     ) &
     CURRENT_PID_METRICS=$!
 
-    log_info "Warte auf Container (Timeout 300s)..."
-    kubectl wait --for=condition=Ready pod/$pod_name --timeout=300s >/dev/null 2>&1
+    log_info "Warte auf Container (Timeout 600s)..."
+    kubectl wait --for=condition=Ready pod/$pod_name --timeout=600s >/dev/null 2>&1
     
-# --- Logs ---
     echo -e "${BLUE}--- Logs ---${NC}"
-    # Wir streamen logs im Hintergrund und warten explizit auf den Pod Status
     kubectl logs -f $pod_name &
     LOG_PID=$!
 
-    # Warte bis Pod fertig ist (Succeeded oder Failed)
     while true; do
         STATUS=$(kubectl get pod $pod_name -o jsonpath='{.status.phase}' 2>/dev/null)
-        if [ "$STATUS" == "Succeeded" ] || [ "$STATUS" == "Failed" ]; then
-            break
-        fi
-        # Sicherheitsnetz: Wenn Pod weg ist
+        if [ "$STATUS" == "Succeeded" ] || [ "$STATUS" == "Failed" ]; then break; fi
         if [ -z "$STATUS" ]; then break; fi
         sleep 2
     done
 
-    # Log Stream beenden falls er noch hängt
     kill $LOG_PID 2>/dev/null || true
     wait $LOG_PID 2>/dev/null || true
-    
-    # Metrik-Prozess beenden
     kill $CURRENT_PID_METRICS 2>/dev/null || true
     wait $CURRENT_PID_METRICS 2>/dev/null || true
-    # 5. Berechnung & Statistik
+
+    # 5. Berechnung
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     STATS_DURATION[$job_name]=$duration
     
-    # Durchschnitts-Watt berechnen
     if [ -f "$METRIC_FILE" ]; then
         local sum=0
         local count=0
         while read val; do
-            # Einfacher Check ob Zahl
             if [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
                 sum=$(echo "$sum + $val" | bc)
                 count=$((count + 1))
@@ -169,7 +160,6 @@ monitor_job() {
         if [ "$count" -gt 0 ]; then
             local avg_watt=$(echo "scale=2; $sum / $count" | bc)
             STATS_AVG_POWER[$job_name]=$avg_watt
-            # Joule = Watt * Sekunden
             local joules=$(echo "scale=2; $avg_watt * $duration" | bc)
             STATS_JOULES[$job_name]=$joules
         else
@@ -190,7 +180,10 @@ monitor_job() {
 # --- MAIN ---
 log_header "STARTE UNIFIED WORKFLOW (Weight: $PERF_WEIGHT)"
 
-# Cleanup
+if [ ! -f "$RESULTS_FILE" ]; then
+    echo "Timestamp,Weight,Job,Node,Duration,AvgWatts,Joules" > $RESULTS_FILE
+fi
+
 log_info "Cleanup..."
 kubectl delete job ml-preprocess-job ml-train-job ml-inference-job --ignore-not-found=true --wait=false >/dev/null 2>&1
 kubectl delete pvc ml-workflow-pvc --ignore-not-found=true --wait=false >/dev/null 2>&1
@@ -198,7 +191,6 @@ kubectl wait --for=delete job/ml-preprocess-job --timeout=30s 2>/dev/null || tru
 kubectl wait --for=delete job/ml-train-job --timeout=30s 2>/dev/null || true
 kubectl wait --for=delete pvc/ml-workflow-pvc --timeout=30s 2>/dev/null || true
 
-# Storage
 cat <<EOF | kubectl apply -f - >/dev/null
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -206,7 +198,7 @@ metadata: { name: ml-workflow-pvc }
 spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 1Gi } } }
 EOF
 
-# 1. Preprocessing
+# 1. Preprocessing (CPU)
 JOB1=$(cat <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -215,7 +207,7 @@ spec:
   template:
     metadata:
       labels: { app: ml-workflow, workload-profile: "sequential" }
-      annotations: { scheduler.policy/performance-weight: "0.0" }
+      annotations: { scheduler.policy/performance-weight: "$PERF_WEIGHT" }
     spec:
       schedulerName: my-energy-scheduler
       restartPolicy: Never
@@ -229,7 +221,7 @@ EOF
 )
 monitor_job "ml-preprocess-job" "$JOB1" || cleanup_and_exit
 
-# 2. Training (25 EPOCHS, GPU ENABLED)
+# 2. Training (GPU ENABLED)
 JOB2=$(cat <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -244,7 +236,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: train
-        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v24 
+        image: 192.168.178.136:5000/ml-workflow-gpu:v24 
         command: ["python3", "train.py"]
         env: 
         - { name: EPOCHS, value: "25" }
@@ -256,7 +248,7 @@ EOF
 )
 monitor_job "ml-train-job" "$JOB2" || cleanup_and_exit
 
-# 3. Inference (5M SAMPLES, GPU ENABLED)
+# 3. Inference (GPU ENABLED)
 JOB3=$(cat <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -271,7 +263,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: inference
-        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v24
+        image: 192.168.178.136:5000/ml-workflow-gpu:v24
         command: ["python3", "inference.py"]
         env: 
         - { name: TOTAL_SAMPLES, value: "5000000" }
@@ -283,10 +275,13 @@ EOF
 )
 monitor_job "ml-inference-job" "$JOB3" || cleanup_and_exit
 
-# Summary
+# Summary & CSV Export
+TS=$(date +%Y-%m-%dT%H:%M:%S)
 log_header "SUMMARY"
 printf "%-20s | %-15s | %-10s | %-10s | %-10s\n" "Job" "Node" "Sec" "Ø Watt" "Joules"
 echo "---------------------------------------------------------------------------"
-printf "%-20s | %-15s | %-10s | %-10s | %-10s\n" "Preprocessing" "${STATS_NODES[ml-preprocess-job]}" "${STATS_DURATION[ml-preprocess-job]}" "${STATS_AVG_POWER[ml-preprocess-job]}" "${STATS_JOULES[ml-preprocess-job]}"
-printf "%-20s | %-15s | %-10s | %-10s | %-10s\n" "Training" "${STATS_NODES[ml-train-job]}" "${STATS_DURATION[ml-train-job]}" "${STATS_AVG_POWER[ml-train-job]}" "${STATS_JOULES[ml-train-job]}"
-printf "%-20s | %-15s | %-10s | %-10s | %-10s\n" "Inference" "${STATS_NODES[ml-inference-job]}" "${STATS_DURATION[ml-inference-job]}" "${STATS_AVG_POWER[ml-inference-job]}" "${STATS_JOULES[ml-inference-job]}"
+for job in "ml-preprocess-job" "ml-train-job" "ml-inference-job"; do
+    printf "%-20s | %-15s | %-10s | %-10s | %-10s\n" "${job#ml-}" "${STATS_NODES[$job]}" "${STATS_DURATION[$job]}" "${STATS_AVG_POWER[$job]}" "${STATS_JOULES[$job]}"
+    echo "$TS,$PERF_WEIGHT,${job#ml-},${STATS_NODES[$job]},${STATS_DURATION[$job]},${STATS_AVG_POWER[$job]},${STATS_JOULES[$job]}" >> $RESULTS_FILE
+done
+echo -e "\n${GREEN}Results saved to $RESULTS_FILE${NC}"
