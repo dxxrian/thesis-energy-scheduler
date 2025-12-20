@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-    // "math" wurde entfernt, da nicht benötigt
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +20,9 @@ import (
 
 const Name = "EnergyScorer"
 const preScoreStateKey framework.StateKey = "EnergyScorerPreScore"
+
+// Wie alt dürfen Daten sein (in Sekunden), bevor wir auf Static Fallback gehen?
+const DataTTLSeconds = 30 
 
 // --- DATENSTRUKTUREN ---
 
@@ -130,7 +133,7 @@ func (es *EnergyScorer) PreScore(ctx context.Context, state *framework.CycleStat
 	return framework.NewStatus(framework.Success)
 }
 
-// --- SCORE PHASE (HYBRID MIT INTERFERENCE DETECTION) ---
+// --- SCORE PHASE (HYBRID MIT DATA FRESHNESS CHECK) ---
 
 func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) (int64, *framework.Status) {
 	data, err := state.Read(preScoreStateKey)
@@ -139,6 +142,7 @@ func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, 
 	}
 	psState := data.(*preScoreState)
 
+	// User-Gewichtung
 	wPerf := 0.5
 	if wStr, ok := p.Annotations["scheduler.policy/performance-weight"]; ok {
 		if w, err := strconv.ParseFloat(wStr, 64); err == nil {
@@ -150,15 +154,33 @@ func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, 
 	if err != nil || nodeInfo.Node() == nil {
 		return 0, framework.NewStatus(framework.Success)
 	}
-	
 	node := nodeInfo.Node()
+
+	// --- HYBRID DATA FETCHING & FRESHNESS CHECK ---
 	currentWatts := 0.0
 	hasRealTimeData := false
+	
+	valWatts, okWatts := node.Annotations["energy.thesis.io/current-watts"]
+	valTime, okTime := node.Annotations["energy.thesis.io/last-updated"]
 
-	if val, ok := node.Annotations["energy.thesis.io/current-watts"]; ok {
-		if w, err := strconv.ParseFloat(val, 64); err == nil {
-			currentWatts = w
-			hasRealTimeData = true
+	if okWatts && okTime {
+		// 1. Zeitstempel prüfen
+		lastUpdated, err := strconv.ParseInt(valTime, 10, 64)
+		if err == nil {
+			secondsAgo := time.Now().Unix() - lastUpdated
+			
+			if secondsAgo < DataTTLSeconds {
+				// 2. Watt-Wert parsen nur wenn Daten frisch sind
+				if w, err := strconv.ParseFloat(valWatts, 64); err == nil {
+					currentWatts = w
+					hasRealTimeData = true
+				}
+			} else {
+				// Logging für Thesis-Nachweis (Stale Data Detection)
+				// Wir loggen nur sporadisch oder bei Bedarf, um Logs nicht zu fluten. 
+				// Hier für Demo-Zwecke immer:
+				// log.Printf("[EnergyScorer] WARN: Stale Data on Node %s. %d seconds old (Limit: %d). Fallback to static profile.", nodeName, secondsAgo, DataTTLSeconds)
+			}
 		}
 	}
 
@@ -167,35 +189,37 @@ func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, 
 	for _, np := range psState.targetProfile {
 		if strings.Contains(np.NodeName, nodeName) {
 			
-			// 1. Basis-Berechnung
+			// 1. Basis-Berechnung (Statisch)
 			workloadDelta := np.PowerConsumptionWatts - np.IdlePowerWatts
 			if workloadDelta <= 0 { workloadDelta = 1 }
 
-			projectedTotalWatts := np.PowerConsumptionWatts 
-			
-            // --- INTERFERENCE CALCULATION ---
-            performancePenaltyFactor := 1.0
+			projectedTotalWatts := np.PowerConsumptionWatts // Default: Statischer Wert
+			performancePenaltyFactor := 1.0
 
+			// 2. Hybride Berechnung (Wenn Daten frisch sind)
 			if hasRealTimeData {
 				projectedTotalWatts = currentWatts + workloadDelta
 
-                // Berechne "Sättigung"
-                idleBuffer := np.IdlePowerWatts * 1.2 
+				// Verbesserter Idle-Buffer (Absolute 2W Toleranz für RPi)
+				idleBuffer := np.IdlePowerWatts * 1.2
+				if (np.IdlePowerWatts + 2.0) > idleBuffer {
+					idleBuffer = np.IdlePowerWatts + 2.0
+				}
                 
                 if currentWatts > idleBuffer {
+                    // Berechnung der Magnitude der Störung
                     loadMagnitude := (currentWatts - np.IdlePowerWatts) / workloadDelta
                     if loadMagnitude < 0 { loadMagnitude = 0 }
                     
-                    // Straffaktor: 1 / (1 + 5x)
+                    // Penalty-Funktion
                     performancePenaltyFactor = 1.0 / (1.0 + (loadMagnitude * 5.0))
                 }
 			}
 
             adjustedPerformanceRate := np.PerformanceRate * performancePenaltyFactor
-
 			if projectedTotalWatts <= 1 { projectedTotalWatts = 1 }
 
-			// Effizienz mit Strafe
+			// Effizienzberechnung
 			eff := adjustedPerformanceRate / projectedTotalWatts
 
 			// Normalisierung
@@ -204,8 +228,9 @@ func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, 
 			
 			finalScore := (wPerf * normPerf) + ((1 - wPerf) * normEff)
 
-			logMsg := fmt.Sprintf(`{"pod": "%s", "node": "%s", "variant": "%s", "score": %d, "perf": %.1f, "eff": %.1f, "realWatts": %.1f, "penalty": %.2f}`, 
-				p.Name, nodeName, np.NodeName, int64(finalScore), normPerf, normEff, currentWatts, performancePenaltyFactor)
+			// Logging für Analyse (JSON) - Erweitert um Freshness Flag
+			logMsg := fmt.Sprintf(`{"pod": "%s", "node": "%s", "variant": "%s", "score": %d, "perf": %.1f, "eff": %.1f, "realWatts": %.1f, "hybrid": %t, "penalty": %.2f}`, 
+				p.Name, nodeName, np.NodeName, int64(finalScore), normPerf, normEff, currentWatts, hasRealTimeData, performancePenaltyFactor)
 			log.Println(logMsg)
 
 			if finalScore > bestScore {

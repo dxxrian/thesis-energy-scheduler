@@ -9,9 +9,14 @@ NODE_SHELLY_MAP = {
     "dgoh-wyze": "192.168.188.130",
     "rpi": "192.168.188.129"
 }
-ANNOTATION_KEY = "energy.thesis.io/current-watts"
-ANNOTATION_PATH = f"/metadata/annotations/{ANNOTATION_KEY.replace('/', '~1')}"
-POLL_INTERVAL_SECONDS = 1 # 1 Sekunde
+
+# Annotation Keys (JSON Patch benötigt Escaping von '/' zu '~1')
+KEY_WATTS = "energy.thesis.io/current-watts"
+KEY_TIME = "energy.thesis.io/last-updated"
+PATH_WATTS = f"/metadata/annotations/{KEY_WATTS.replace('/', '~1')}"
+PATH_TIME = f"/metadata/annotations/{KEY_TIME.replace('/', '~1')}"
+
+POLL_INTERVAL_SECONDS = 1 
 
 def get_shelly_power(ip):
     """Fragt einen einzelnen Shelly Plug ab und gibt den Leistungswert zurück."""
@@ -19,6 +24,7 @@ def get_shelly_power(ip):
         response = requests.get(f"http://{ip}/rpc/Shelly.GetStatus", timeout=2)
         response.raise_for_status()
         data = response.json()
+        # Pfad für Shelly Gen2/Plus Geräte
         power = data.get("switch:0", {}).get("apower")
         if power is not None:
             return float(power)
@@ -30,8 +36,13 @@ def get_shelly_power(ip):
         return None
 
 def main():
-    print("Integrierter Energy-Monitor wird gestartet...")
-    config.load_incluster_config()
+    print("Integrierter Energy-Monitor (Hybrid mit Timestamp) wird gestartet...")
+    try:
+        config.load_incluster_config()
+    except:
+        print("Warnung: Konnte In-Cluster-Config nicht laden. Versuche lokale Kubeconfig...")
+        config.load_kube_config()
+        
     api = client.CoreV1Api()
     print("Erfolgreich mit der Kubernetes-API verbunden.")
 
@@ -41,22 +52,29 @@ def main():
 
             if power_watts is not None:
                 power_value_str = f"{power_watts:.2f}"
-                print(f"Node '{node_name}' ({shelly_ip}): {power_value_str} W")
+                timestamp_str = str(int(time.time()))
+                
+                print(f"Node '{node_name}' ({shelly_ip}): {power_value_str} W (TS: {timestamp_str})")
 
-                patch_body = [{"op": "replace", "path": ANNOTATION_PATH, "value": power_value_str}]
+                # Wir versuchen beide Werte atomar zu aktualisieren
+                patch_body = [
+                    {"op": "replace", "path": PATH_WATTS, "value": power_value_str},
+                    {"op": "replace", "path": PATH_TIME, "value": timestamp_str}
+                ]
+                
                 try:
                     api.patch_node(node_name, patch_body)
                 except client.ApiException as e:
-                    # für den Fall, dass die Annotation noch nicht existiert
-                    if e.status == 422: 
-                        # '422 Unprocessable Entity' bedeutet oft, dass der 'replace' Pfad nicht existiert.
-                        # Versuche es stattdessen mit 'add'.
-                        print(f"Annotation auf Node '{node_name}' existiert nicht, versuche 'add'...")
+                    # 422 Unprocessable Entity passiert oft, wenn der Key noch nicht existiert (replace vs add)
+                    if e.status == 422 or e.status == 404:
+                        print(f"Annotationen auf '{node_name}' existieren ggf. nicht, versuche 'add' Operation...")
+                        # Fallback: Versuche 'add' statt 'replace'
                         patch_body[0]['op'] = 'add'
+                        patch_body[1]['op'] = 'add'
                         try:
                             api.patch_node(node_name, patch_body)
                         except Exception as add_e:
-                            print(f"Fehler beim Hinzufügen der Annotation für Node '{node_name}': {add_e}")
+                            print(f"Fehler beim Hinzufügen der Annotationen für Node '{node_name}': {add_e}")
                     else:
                         print(f"API-Fehler beim Patchen von Node '{node_name}': {e}")
             else:
