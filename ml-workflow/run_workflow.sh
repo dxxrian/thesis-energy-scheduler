@@ -213,7 +213,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: preprocess
-        image: 192.168.178.136:5000/ml-workflow-cpu-amd64:v24
+        image: 192.168.188.23:5000/ml-workflow-cpu-amd64:v1
         command: ["python3", "preprocess.py"]
         volumeMounts: [{ name: data, mountPath: /data }]
       volumes: [{ name: data, persistentVolumeClaim: { claimName: ml-workflow-pvc } }]
@@ -236,7 +236,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: train
-        image: 192.168.178.136:5000/ml-workflow-gpu:v24 
+        image: 192.168.188.23:5000/ml-workflow-gpu:v1 
         command: ["python3", "train.py"]
         env: 
         - { name: EPOCHS, value: "25" }
@@ -263,7 +263,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: inference
-        image: 192.168.178.136:5000/ml-workflow-gpu:v24
+        image: 192.168.188.23:5000/ml-workflow-gpu:v1
         command: ["python3", "inference.py"]
         env: 
         - { name: TOTAL_SAMPLES, value: "5000000" }

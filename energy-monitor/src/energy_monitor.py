@@ -5,9 +5,9 @@ from kubernetes import client, config
 
 # --- Konfiguration ---
 NODE_SHELLY_MAP = {
-    "tvpc": "192.168.178.128",
-    "dgoh-wyze": "192.168.178.130",
-    "rpi": "192.168.178.129"
+    "tvpc": "192.168.188.128",
+    "dgoh-wyze": "192.168.188.130",
+    "rpi": "192.168.188.129"
 }
 ANNOTATION_KEY = "energy.thesis.io/current-watts"
 ANNOTATION_PATH = f"/metadata/annotations/{ANNOTATION_KEY.replace('/', '~1')}"

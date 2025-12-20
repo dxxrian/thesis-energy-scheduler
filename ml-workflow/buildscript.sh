@@ -6,9 +6,9 @@ sudo pkill buildkitd || true # Stoppt alte Prozesse
 sudo buildkitd > /dev/null 2>&1 &
 sleep 3
 
-REGISTRY_IP_PORT="192.168.178.136:5000"
+REGISTRY_IP_PORT="192.168.188.23:5000"
 NERD_ADDR="--address /run/k3s/containerd/containerd.sock -n k8s.io"
-TAG="v26"
+TAG="v1"
 
 echo "--- Starte Build-Prozess für Tag: $TAG ---"
 

@@ -8,7 +8,7 @@ spec:
   nodeName: "tvpc"
   containers:
   - name: gpu-task
-    image: 192.168.178.136:5000/gpu-benchmark:v2
+    image: 192.168.188.23:5000/gpu-benchmark:v2
     env:
     - name: NODE_NAME
       valueFrom:

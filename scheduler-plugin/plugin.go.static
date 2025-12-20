@@ -1,3 +1,4 @@
+// staging/src/k8s.io/myenergyplugin/myenergyplugin.go
 package myenergyplugin
 
 import (
@@ -7,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-    // "math" wurde entfernt, da nicht benötigt
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,8 +20,6 @@ import (
 
 const Name = "EnergyScorer"
 const preScoreStateKey framework.StateKey = "EnergyScorerPreScore"
-
-// --- DATENSTRUKTUREN ---
 
 type NodeProfile struct {
 	NodeName              string  `yaml:"nodeName"`
@@ -40,19 +38,15 @@ type preScoreState struct {
 
 func (s *preScoreState) Clone() framework.StateData { return s }
 
-// --- PLUGIN STRUKTUR ---
-
 type EnergyScorer struct {
-	handle     framework.Handle
-	clientset  *kubernetes.Clientset
+	handle       framework.Handle
+	clientset    *kubernetes.Clientset
 	profileCache ProfileData
 	cacheMutex   sync.RWMutex
 }
 
 var _ framework.PreScorePlugin = &EnergyScorer{}
 var _ framework.ScorePlugin = &EnergyScorer{}
-
-// --- INITIALISIERUNG ---
 
 func New(_ runtime.Object, h framework.Handle) (framework.Plugin, error) {
 	config, err := rest.InClusterConfig()
@@ -68,8 +62,6 @@ func New(_ runtime.Object, h framework.Handle) (framework.Plugin, error) {
 
 func (es *EnergyScorer) Name() string { return Name }
 func (es *EnergyScorer) ScoreExtensions() framework.ScoreExtensions { return nil }
-
-// --- HILFSFUNKTIONEN ---
 
 func (es *EnergyScorer) getProfiles(ctx context.Context) (ProfileData, error) {
 	es.cacheMutex.RLock()
@@ -93,8 +85,6 @@ func (es *EnergyScorer) getProfiles(ctx context.Context) (ProfileData, error) {
 	return profiles, nil
 }
 
-// --- PRESCORE PHASE ---
-
 func (es *EnergyScorer) PreScore(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodes []*v1.Node) *framework.Status {
 	workloadProfileName, ok := p.Labels["workload-profile"]
 	if !ok {
@@ -116,7 +106,9 @@ func (es *EnergyScorer) PreScore(ctx context.Context, state *framework.CycleStat
 			maxP = np.PerformanceRate
 		}
 		powerDelta := np.PowerConsumptionWatts - np.IdlePowerWatts
-		if powerDelta <= 0 { powerDelta = 1 }
+		if powerDelta <= 0 {
+			powerDelta = 1
+		}
 		eff := np.PerformanceRate / powerDelta
 		if eff > maxE {
 			maxE = eff
@@ -130,8 +122,6 @@ func (es *EnergyScorer) PreScore(ctx context.Context, state *framework.CycleStat
 	return framework.NewStatus(framework.Success)
 }
 
-// --- SCORE PHASE (HYBRID MIT INTERFERENCE DETECTION) ---
-
 func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) (int64, *framework.Status) {
 	data, err := state.Read(preScoreStateKey)
 	if err != nil {
@@ -139,6 +129,7 @@ func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, 
 	}
 	psState := data.(*preScoreState)
 
+	// Gewichtung
 	wPerf := 0.5
 	if wStr, ok := p.Annotations["scheduler.policy/performance-weight"]; ok {
 		if w, err := strconv.ParseFloat(wStr, 64); err == nil {
@@ -146,68 +137,33 @@ func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, 
 		}
 	}
 
-	nodeInfo, err := es.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
-	if err != nil || nodeInfo.Node() == nil {
-		return 0, framework.NewStatus(framework.Success)
-	}
-	
-	node := nodeInfo.Node()
-	currentWatts := 0.0
-	hasRealTimeData := false
-
-	if val, ok := node.Annotations["energy.thesis.io/current-watts"]; ok {
-		if w, err := strconv.ParseFloat(val, 64); err == nil {
-			currentWatts = w
-			hasRealTimeData = true
-		}
-	}
-
 	var bestScore float64 = 0
-
+    // Wir iterieren über ALLE Profile in der Liste.
+    // Wenn eines zum aktuellen Node passt (z.B. "tvpc-gpu" passt zu Node "tvpc"), berechnen wir es.
 	for _, np := range psState.targetProfile {
+        // Passt das Profil zu diesem Node? (String contains check)
+        // "tvpc-cpu" enthält "tvpc" -> MATCH
+        // "tvpc-gpu" enthält "tvpc" -> MATCH
+        // "rpi-cpu" enthält "tvpc" -> NO MATCH
 		if strings.Contains(np.NodeName, nodeName) {
 			
-			// 1. Basis-Berechnung
-			workloadDelta := np.PowerConsumptionWatts - np.IdlePowerWatts
-			if workloadDelta <= 0 { workloadDelta = 1 }
+            // Berechnung
+			powerDelta := np.PowerConsumptionWatts - np.IdlePowerWatts
+			if powerDelta <= 0 { powerDelta = 1 }
+			eff := np.PerformanceRate / powerDelta
 
-			projectedTotalWatts := np.PowerConsumptionWatts 
-			
-            // --- INTERFERENCE CALCULATION ---
-            performancePenaltyFactor := 1.0
-
-			if hasRealTimeData {
-				projectedTotalWatts = currentWatts + workloadDelta
-
-                // Berechne "Sättigung"
-                idleBuffer := np.IdlePowerWatts * 1.2 
-                
-                if currentWatts > idleBuffer {
-                    loadMagnitude := (currentWatts - np.IdlePowerWatts) / workloadDelta
-                    if loadMagnitude < 0 { loadMagnitude = 0 }
-                    
-                    // Straffaktor: 1 / (1 + 5x)
-                    performancePenaltyFactor = 1.0 / (1.0 + (loadMagnitude * 5.0))
-                }
-			}
-
-            adjustedPerformanceRate := np.PerformanceRate * performancePenaltyFactor
-
-			if projectedTotalWatts <= 1 { projectedTotalWatts = 1 }
-
-			// Effizienz mit Strafe
-			eff := adjustedPerformanceRate / projectedTotalWatts
-
-			// Normalisierung
-			normPerf := (adjustedPerformanceRate / psState.maxPerformance) * 100.0
+			normPerf := (np.PerformanceRate / psState.maxPerformance) * 100.0
 			normEff := (eff / psState.maxEfficiency) * 100.0
 			
 			finalScore := (wPerf * normPerf) + ((1 - wPerf) * normEff)
 
-			logMsg := fmt.Sprintf(`{"pod": "%s", "node": "%s", "variant": "%s", "score": %d, "perf": %.1f, "eff": %.1f, "realWatts": %.1f, "penalty": %.2f}`, 
-				p.Name, nodeName, np.NodeName, int64(finalScore), normPerf, normEff, currentWatts, performancePenaltyFactor)
+			// Logging für Analyse (JSON)
+            // Wir loggen JEDEN Treffer, damit das Skript sie alle sammeln kann
+			logMsg := fmt.Sprintf(`{"pod": "%s", "node": "%s", "variant": "%s", "score": %d, "perf": %.1f, "eff": %.1f, "weight": %.1f}`, 
+                p.Name, nodeName, np.NodeName, int64(finalScore), normPerf, normEff, wPerf)
 			log.Println(logMsg)
 
+            // Wir nehmen für den Scheduler den BESTEN Wert, den dieser Node bieten kann
 			if finalScore > bestScore {
 				bestScore = finalScore
 			}

@@ -18,7 +18,7 @@ spec:
       serviceAccountName: my-energy-scheduler-sa
       containers:
       - name: scheduler
-        image: 192.168.178.136:5000/my-energy-scheduler:v2
+        image: 192.168.188.23:5000/my-energy-scheduler:hybrid-v1
         args:
         - --config=/etc/kubernetes/scheduler-config.yaml
         - --v=4

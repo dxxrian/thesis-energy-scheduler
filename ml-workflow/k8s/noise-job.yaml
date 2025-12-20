@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: noise-generator-tvpc
+  namespace: default
+  labels:
+    app: noise-generator
+spec:
+  nodeName: tvpc           # WICHTIG: Zwingt den Pod auf den TVPC
+  restartPolicy: Never
+  containers:
+  - name: stress-cpu
+    image: python:3.9-slim
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "🔥 Starte CPU Burner auf TVPC (4 Cores)..."
+      python3 -c "
+      import multiprocessing, time
+      
+      def burn_cpu():
+          while True:
+              _ = 234234 * 234234 ** 2  # Reine CPU-Last
+              
+      if __name__ == '__main__':
+          # Wir starten 4 Prozesse (für deine 4 Kerne)
+          procs = []
+          for _ in range(4):
+              p = multiprocessing.Process(target=burn_cpu)
+              p.start()
+              procs.append(p)
+          
+          # Läuft für 10 Minuten (600 Sekunden)
+          time.sleep(600)
+      "
+    resources:
+      # Wir reservieren fast die ganze CPU, damit K8s denkt, der Node ist voll
+      requests:
+        cpu: "3000m" 
+      limits:
+        cpu: "4000m"

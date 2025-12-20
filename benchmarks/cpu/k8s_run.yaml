@@ -7,7 +7,7 @@ spec:
   nodeName: "rpi" # tvpc, dgoh-wyze, rpi
   containers:
   - name: cpu-task
-    image: 192.168.178.136:5000/cpu-benchmark:armv7-v3 #armv7-vX, amd64-vX
+    image: 192.168.188.23:5000/cpu-benchmark:armv7-v3 #armv7-vX, amd64-vX
     env:
     - name: NODE_NAME
       valueFrom:
