@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ml-inference-job
+  labels:
+    app: ml-workflow
+spec:
+  template:
+    metadata:
+      labels:
+        app: ml-workflow
+        workload-profile: "inference"
+      annotations:
+        scheduler.policy/performance-weight: "0.5"
+    spec:
+      schedulerName: my-energy-scheduler
+      restartPolicy: Never
+      containers:
+      - name: inference
+        image: 192.168.188.23:5000/ml-workflow-cpu-amd64:v6
+        command: ["python3", "inference.py"]
+        env:
+        - name: TOTAL_SAMPLES
+          value: "1000000"
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+      volumes:
+      - name: data-storage
+        persistentVolumeClaim:
+          claimName: ml-workflow-pvc
+  backoffLimit: 0

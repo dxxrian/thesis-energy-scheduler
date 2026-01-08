@@ -8,16 +8,21 @@ import time
 import os
 import sys
 import shutil
+import pickle
 
 # KONFIGURATION
 EPOCHS = int(os.environ.get('EPOCHS', 25))
-# Größere Batch Size für bessere GPU Auslastung
 BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 8192)) 
 
 NFS_DATA_PATH = '/data/preprocessed_retail_data.csv'
 LOCAL_DATA_PATH = '/tmp/training_data.csv'
 NFS_MODEL_PATH = '/data/retail_model.h5'
+NFS_WEIGHTS_PKL = '/data/retail_model.weights.pkl'
+NFS_SHAPE_PATH = '/data/model_shape.txt'
+
 LOCAL_MODEL_PATH = '/tmp/retail_model.h5'
+LOCAL_WEIGHTS_PKL = '/tmp/retail_model.weights.pkl'
+LOCAL_SHAPE_PATH = '/tmp/model_shape.txt'
 
 print(f"--- Phase 2: Training (Optimized GPU Load) ---")
 script_start_time = time.time()
@@ -41,7 +46,6 @@ try:
     if 'Quantity' not in df.columns: raise ValueError("Quantity fehlt")
     df['PurchasedMultiple'] = (df['Quantity'] > 1).astype(int)
 
-    # Daten künstlich vervielfachen, damit die Epoche länger dauert (GPU Stress)
     print("Vervielfache Daten für Last-Test...", flush=True)
     df = pd.concat([df]*5, ignore_index=True)
 
@@ -59,11 +63,12 @@ try:
     X_test = preprocessor.transform(X_test)
 
     if hasattr(X_train, "toarray"): X_train = X_train.toarray()
-    if hasattr(X_test, "toarray"): X_test = X_test.toarray()
+    
+    input_dim = X_train.shape[1]
+    print(f"Input Dimension: {input_dim}", flush=True)
 
-    # Modell etwas "fetter" machen (mehr Layer = mehr GPU Arbeit)
     model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(X_train.shape[1],)),
+        tf.keras.layers.Input(shape=(input_dim,)),
         tf.keras.layers.Dense(1024, activation='relu'),
         tf.keras.layers.Dropout(0.3),
         tf.keras.layers.Dense(512, activation='relu'),
@@ -76,10 +81,33 @@ try:
     print(f"Starte Training ({EPOCHS} Epochen)...", flush=True)
     model.fit(X_train, y_train, epochs=EPOCHS, batch_size=BATCH_SIZE, validation_split=0.1, verbose=2)
 
-    print(f"Speichere Modell...", flush=True)
-    model.save(LOCAL_MODEL_PATH, save_format='h5')
-    shutil.move(LOCAL_MODEL_PATH, NFS_MODEL_PATH)
-    print("✅ Erfolg.", flush=True)
+    print(f"Speichere Artefakte...", flush=True)
+    
+    # 1. Standard H5
+    try:
+        model.save(LOCAL_MODEL_PATH, save_format='h5')
+        shutil.move(LOCAL_MODEL_PATH, NFS_MODEL_PATH)
+        print(" - Vollständiges Modell gespeichert (H5).")
+    except Exception as e:
+        print(f"⚠ Warnung: Konnte H5 Modell nicht speichern: {e}")
+
+    # 2. Gewichte als Pickle (NEU: Als reine Python-Liste!)
+    # Dies verhindert 'numpy._core' Fehler auf alten Nodes
+    weights = model.get_weights()
+    weights_as_list = [w.tolist() for w in weights] # <--- FIX: Konvertierung zu List
+    
+    with open(LOCAL_WEIGHTS_PKL, 'wb') as f:
+        pickle.dump(weights_as_list, f)
+    shutil.move(LOCAL_WEIGHTS_PKL, NFS_WEIGHTS_PKL)
+    print(" - Gewichte gespeichert (Universal Python List).")
+
+    # 3. Shape Info
+    with open(LOCAL_SHAPE_PATH, 'w') as f:
+        f.write(str(input_dim))
+    shutil.move(LOCAL_SHAPE_PATH, NFS_SHAPE_PATH)
+    print(" - Shape Info gespeichert.")
+
+    print("✅ Erfolg: Training beendet.", flush=True)
 
 except Exception as e:
     print(f"❌ FEHLER: {e}", file=sys.stderr)

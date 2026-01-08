@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ml-preprocessing-job
+  labels:
+    app: ml-workflow
+spec:
+  template:
+    metadata:
+      labels:
+        app: ml-workflow
+        workload-profile: "sequential"
+      annotations:
+        scheduler.policy/performance-weight: "0.5"
+    spec:
+      schedulerName: my-energy-scheduler
+      runtimeClassName: nvidia
+      restartPolicy: Never
+      containers:
+      - name: preprocess
+        image: 192.168.188.23:5000/ml-workflow-gpu:v6
+        command: ["python3", "preprocess.py"]
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+      volumes:
+      - name: data-storage
+        persistentVolumeClaim:
+          claimName: ml-workflow-pvc
+  backoffLimit: 0

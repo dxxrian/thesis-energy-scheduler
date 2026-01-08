@@ -61,3 +61,7 @@ data:
         performanceRate: 71.96
         powerConsumptionWatts: 2.80
         idlePowerWatts: 2.32
+      - nodeName: "tvpc-gpu"
+        performanceRate: 6.73
+        powerConsumptionWatts: 92.40
+        idlePowerWatts: 52.00

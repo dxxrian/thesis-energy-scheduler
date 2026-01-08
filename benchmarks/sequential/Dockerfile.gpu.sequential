@@ -1,0 +1,7 @@
+# Wir nutzen das Image, das bei dir schon funktioniert hat!
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+
+WORKDIR /app
+COPY gpu-sequential-task.py .
+
+ENTRYPOINT ["python", "gpu-sequential-task.py"]
