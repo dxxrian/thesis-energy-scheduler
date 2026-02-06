@@ -203,17 +203,55 @@ func (es *EnergyScorer) Score(ctx context.Context, state *framework.CycleState, 
 			
 			finalScore := (wPerf * normPerf) + ((1 - wPerf) * normEff)
 
-			// NEU: Logge JEDE Variante als DETAIL, damit wir im Skript alle sehen
-			detailMsg := fmt.Sprintf("ENERGY-DETAIL: pod=%s node=%s variant=%s score=%d watts=%.2f perf=%.1f eff=%.1f", 
-				p.Name, nodeName, profName, int64(finalScore), projectedTotalWatts, normPerf, normEff)
-			klog.Info(detailMsg)
+			// --- METRIKEN BERECHNEN ---
+                        
+                        // 1. Live Idle (Messwert vom Node)
+                        liveIdle := currentWatts 
+                        // Fallback, falls keine Live-Daten da sind (z.B. erster Start)
+                        if !hasRealTimeData {
+                            liveIdle = np.IdlePowerWatts
+                        }
 
-			if finalScore > bestNodeScore {
-				bestNodeScore = finalScore
-				bestVariantName = profName 
-				bestProjectedWatts = projectedTotalWatts
-			}
-		}
+                        // 2. Marginal Load (Zusatzlast laut Wissensbasis)
+                        marginalLoad := np.PowerConsumptionWatts - np.IdlePowerWatts
+                        if marginalLoad < 0 { marginalLoad = 0 }
+
+                        // 3. Projected Total (Prognose)
+                        // (Hinweis: projectedTotalWatts wurde oben schon berechnet, wir nutzen es hier)
+                        
+                        // 4. Raw Performance (Wissensbasis)
+                        // (adjustedPerformanceRate beinhaltet ggf. Penalty bei Überlast)
+                        
+                        // 5. Raw Efficiency (Berechnet)
+                        rawEfficiency := 0.0
+                        if projectedTotalWatts > 0 {
+                            rawEfficiency = adjustedPerformanceRate / projectedTotalWatts
+                        }
+
+                        // --- LOGGING FÜR DIE THESIS ---
+                        // Format: THESIS-DATA;Job;Node;Variant;Weight;LiveIdle;Marginal;PredTotal;RawPerf;RawEff;NormPerf;NormEff;FinalScore
+                        thesisLog := fmt.Sprintf("THESIS-DATA;%s;%s;%s;%.1f;%.2f;%.2f;%.2f;%.2f;%.4f;%.1f;%.1f;%d",
+                            p.Name,
+                            nodeName,
+                            profName,
+                            wPerf,           // Weight (Alpha)
+                            liveIdle,        // 1. Live Idle
+                            marginalLoad,    // 2. Job Last
+                            projectedTotalWatts, // 3. Prognose
+                            adjustedPerformanceRate, // 4. Performance
+                            rawEfficiency,   // 5. Effizienz
+                            normPerf,        // 6. Norm Perf
+                            normEff,         // 7. Norm Eff
+                            int64(finalScore)) // Final Score
+
+                        klog.Info(thesisLog)
+
+                        // --- BEST SCORE ERMITTELN ---
+                        if finalScore > bestNodeScore {
+                            bestNodeScore = finalScore
+                            bestVariantName = profName  
+                            bestProjectedWatts = projectedTotalWatts
+                        }		}
 	}
 
 	if bestNodeScore < 0 {

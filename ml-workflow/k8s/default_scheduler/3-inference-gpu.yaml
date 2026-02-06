@@ -14,14 +14,18 @@ spec:
         scheduler.policy/performance-weight: "0.5"
     spec:
       schedulerName: my-energy-scheduler
+      runtimeClassName: nvidia
       restartPolicy: Never
       containers:
       - name: inference
-        image: 192.168.188.23:5000/ml-workflow-cpu-armv7:v1
+        image: 192.168.188.23:5000/ml-workflow-gpu:v1
         command: ["python3", "inference.py"]
         env:
         - name: TOTAL_SAMPLES
           value: "1000000"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
         volumeMounts:
         - name: data-storage
           mountPath: /data

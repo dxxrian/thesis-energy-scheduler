@@ -1,54 +1,60 @@
-# gpu_task.py
-import torch
 import time
 import os
+import tensorflow as tf
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 def main():
-    node_name = os.environ.get('NODE_NAME', 'unknown')
-    print(f"Starting GPU-intensive task (Matrix Multiplication) on node {node_name}...")
-
-    if not torch.cuda.is_available():
-        print(f"Node {node_name}: !!! CUDA NOT AVAILABLE !!! Exiting.")
-        exit(1)
-
-    device = torch.device("cuda")
-    print(f"Node {node_name}: Found CUDA device: {torch.cuda.get_device_name(0)}")
-
     try:
         matrix_size = int(os.environ.get('MATRIX_SIZE', 4096))
-        num_iterations = int(os.environ.get('NUM_ITERATIONS', 2000))
+        num_iterations = int(os.environ.get('NUM_ITERATIONS', 200))
     except ValueError:
         matrix_size = 4096
-        num_iterations = 2000
+        num_iterations = 200
 
-    print(f"Performing {num_iterations} iterations of matrix multiplication {matrix_size}x{matrix_size}...")
+    node_name = os.environ.get('NODE_NAME', 'unknown')
 
-    a = torch.randn(matrix_size, matrix_size, device=device)
-    b = torch.randn(matrix_size, matrix_size, device=device)
+    print(f"--- REALISTIC GPU BENCHMARK (TF Dense Layer) ---")
+    print(f"Node: {node_name}")
+    
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        print("!!! ERROR: NO GPU FOUND !!!")
+        exit(1)
+    
+    print(f"GPU Found: {gpus[0]}")
 
-    # Warmup
-    _ = torch.matmul(a, b)
-    torch.cuda.synchronize()
+    with tf.device('/GPU:0'):
+        a = tf.random.normal((matrix_size, matrix_size))
+        b = tf.random.normal((matrix_size, matrix_size))
+        bias = tf.random.normal((matrix_size,))
 
-    start_time = time.time()
+        print("Warming up...")
+        res = tf.matmul(a, b)
+        res = tf.nn.bias_add(res, bias)
+        _ = tf.nn.relu(res)
+        # Wichtig: GPU Synchronisation erzwingen durch .numpy() oder expliziten Abruf
+        _ = _.numpy() 
 
-    for _ in range(num_iterations):
-        _ = torch.matmul(a, b)
+        print("Measuring...")
+        start_time = time.time()
 
-    torch.cuda.synchronize()
+        for i in range(num_iterations):
+            res = tf.matmul(a, b)
+            res = tf.nn.bias_add(res, bias)
+            output = tf.nn.relu(res)
+            
+            # Bei der letzten Iteration synchronisieren, um korrekte Zeit zu haben
+            if i == num_iterations - 1:
+                _ = output.numpy()
 
-    end_time = time.time()
+        end_time = time.time()
+
     duration = end_time - start_time
+    ops_per_second = num_iterations / duration if duration > 0 else 0
 
-    if duration > 0:
-        iterations_per_second = num_iterations / duration
-    else:
-        iterations_per_second = 0
-
-    print(f"Node {node_name}: Matrix multiplication completed.")
-    print(f"Node {node_name}: GPU task duration: {duration:.4f} seconds.")
-    print(f"Node {node_name}: Performance (Iterations/s): {iterations_per_second:.2f}")
-
+    print(f"DONE. Duration: {duration:.4f}s")
+    print(f"RESULT_SCORE: {ops_per_second:.2f}")
 
 if __name__ == "__main__":
     main()

@@ -1,15 +1,32 @@
-# Dockerfile.armv7 (Dummy-Version)
-# Basis-Image ist korrekt
+# ml-workflow/Dockerfile.armv7
 FROM python:3.9-slim-bullseye
+
 WORKDIR /app
 
-# WIR ÜBERSPRINGEN DEN 'pip install'-BEFEHL, DER 4 STUNDEN DAUERT
-# Stattdessen installieren wir nur ein Hilfsprogramm
-RUN apt-get update && apt-get install -y --no-install-recommends procps && rm -rf /var/lib/apt/lists/*
+# Wir installieren libopenblas0 (das stellt libopenblas.so.0 bereit)
+# und libatlas-base-dev als Fallback.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0 \
+    libatlas-base-dev \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Wir kopieren den Code, damit der Container "echt" aussieht
+# Pip und Build-Tools
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Da wir nun wissen, dass libopenblas da ist, können wir die 
+# stabilen piwheels-Versionen installieren.
+RUN pip install --no-cache-dir \
+    --extra-index-url https://www.piwheels.org/simple \
+    --prefer-binary \
+    "numpy<2.0" \
+    "pandas<2.1.0" \
+    "scikit-learn<1.3.0" \
+    requests \
+    openpyxl
+
+# Code kopieren
+COPY online+retail+ii.zip .
 COPY src/ .
 
-# Der CMD wird sofort fehlschlagen (z.B. "pandas not found"), 
-# ABER NUR, WENN der Scheduler fälschlicherweise diesen Knoten auswählt.
 CMD ["python3", "preprocess.py"]

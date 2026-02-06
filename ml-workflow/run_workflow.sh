@@ -1,11 +1,14 @@
 #!/bin/bash
-# run_workflow.sh - Adaptive Scheduling with Detailed Scoring
+# run_workflow.sh - Adaptive Scheduling with THESIS-DATA Parsing
 set -u
 trap 'cleanup_and_exit' SIGINT SIGTERM
 
 RESULTS_FILE="thesis_results.csv"
 K8S_DIR="k8s"
 SCHEDULER_LABEL="app=my-energy-scheduler"
+
+# Standard-Gewicht (kann per Argument überschrieben werden)
+GLOBAL_WEIGHT=${1:-"0.0"}
 
 # Globals
 CURRENT_PID_METRICS=""
@@ -26,7 +29,7 @@ NC='\033[0m'
 
 log_info() { echo -e "${BLUE}🔵 $1${NC}"; }
 log_success() { echo -e "${GREEN}✅ $1${NC}"; }
-log_warn() { echo -e "${YELLOW}⚠️ $1${NC}"; }
+log_warn() { echo -e "${YELLOW}⚠ $1${NC}"; }
 log_error() { echo -e "${RED}❌ $1${NC}"; }
 log_header() { echo -e "\n\033[1;37;44m === $1 === \033[0m"; }
 
@@ -44,42 +47,38 @@ cleanup_cluster() {
     log_success "Cluster ist sauber."
 }
 
-# Zeigt ALLE berechneten Varianten an (inkl. GPU/CPU Split)
+# --- NEUE PARSING LOGIK ---
+
 print_scheduler_scores() {
     local pod_name=$1
     local sched_pod=$(kubectl get pod -n kube-system -l $SCHEDULER_LABEL -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     
     echo -e "${MAGENTA}--- Scheduler Scoreboard ($pod_name) ---${NC}"
     if [ -n "$sched_pod" ]; then
-        # Wir filtern nach ENERGY-DETAIL, um ALLE Varianten zu sehen
-        # Sortieren numerisch nach Score (Spalte 'score=XXX')
-        # Wir nutzen sed trick um score an den Anfang zu holen zum Sortieren, dann entfernen
-        kubectl logs -n kube-system "$sched_pod" --tail=200 \
-        | grep "ENERGY-DETAIL" \
+        # Format im Log: THESIS-DATA;Job;Node;Variant;Weight;LiveIdle;Marginal;PredTotal;RawPerf;RawEff;NormPerf;NormEff;FinalScore
+        # Wir wollen: Node(3), Variant(4), PredTotal(8), FinalScore(13)
+        echo "Node            Variant         Watts       Score"
+        echo "-------------------------------------------------"
+        
+        kubectl logs -n kube-system "$sched_pod" --tail=300 \
+        | grep "THESIS-DATA" \
         | grep "$pod_name" \
-        | sed -E 's/.*score=([0-9]+).*/\1 &/' \
-        | sort -rn -k1 \
-        | cut -d' ' -f2- \
-        | head -n 10 \
-        | sed 's/.*ENERGY-DETAIL: //' \
-        | sed 's/pod=[^ ]* //' \
-        | column -t
+        | awk -F';' '{printf "%-15s %-15s %-11s %-5s\n", $3, $4, $8, $13}' \
+        | sort -k4 -nr
     else
         echo "Scheduler Pod not found."
     fi
     echo -e "${MAGENTA}-------------------------------------------${NC}"
 }
 
-# Holt die absolute Gewinner-Variante aus den Logs
 get_scheduler_decision() {
     local pod_name=$1
     local sched_pod=$(kubectl get pod -n kube-system -l $SCHEDULER_LABEL -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     
     if [ -z "$sched_pod" ]; then echo "unknown"; return; fi
 
-    # Sortiere numerisch nach Score und nimm den Höchsten
-    local decision=$(kubectl logs -n kube-system "$sched_pod" --tail=200 \
-        | grep "ENERGY-DETAIL" \
+    local decision=$(kubectl logs -n kube-system "$sched_pod" --tail=300 \
+        | grep "ENERGY-SCORED" \
         | grep "$pod_name" \
         | sed -E 's/.*score=([0-9]+).*/\1 &/' \
         | sort -rn -k1 \
@@ -87,12 +86,12 @@ get_scheduler_decision() {
         | cut -d' ' -f2-)
 
     if [ -n "$decision" ]; then
+        # Extrahiere "variant=xyz"
         echo "$decision" | grep -o 'variant=[^ ]*' | cut -d= -f2
     else
         echo "unknown"
     fi
 }
-
 monitor_job_execution() {
     local job_name=$1
     local pod_name=$2
@@ -104,6 +103,8 @@ monitor_job_execution() {
 
     log_info "Starte Monitoring für Pod $pod_name auf $node_name..."
 
+    # Warte bis Pod scheduled ist und Container erstellt wird
+    sleep 2
     kubectl wait --for=condition=Ready pod/$pod_name --timeout=120s >/dev/null 2>&1
 
     local start_time=$(date +%s)
@@ -162,9 +163,8 @@ run_adaptive_phase() {
     local phase_num=$1; local file_pattern=$2; local profile_label=$3; local weight=$4
     
     local job_name="ml-${file_pattern}-job"
-    if [ "$file_pattern" == "train" ]; then job_name="ml-train-job"; fi 
+    if [ "$file_pattern" == "train" ]; then job_name="ml-train-job"; fi  
     
-    # NEU: Anzeige der Gewichtung im Header
     log_header "PHASE $phase_num: $profile_label (Adaptive | Weight: $weight)"
 
     local default_yaml="$K8S_DIR/${phase_num}-${file_pattern}-cpu-amd64.yaml"
@@ -194,7 +194,7 @@ run_adaptive_phase() {
     
     if [ -z "$chosen_node" ]; then log_error "Timeout: Keine Entscheidung."; return 1; fi
     
-    sleep 3 
+    sleep 3  
     print_scheduler_scores "$pod_name"
     local winning_profile=$(get_scheduler_decision "$pod_name")
     
@@ -237,14 +237,15 @@ run_adaptive_phase() {
 
 # --- MAIN ---
 cleanup_cluster
-log_header "START: ADAPTIVE ML WORKFLOW"
+log_header "START: ADAPTIVE ML WORKFLOW (Weight: $GLOBAL_WEIGHT)"
 
 if ! kubectl get pvc ml-workflow-pvc >/dev/null 2>&1; then kubectl apply -f $K8S_DIR/0-pvc.yaml >/dev/null; fi
 if [ ! -f "$RESULTS_FILE" ]; then echo "Timestamp,Phase,Weight,Node,Profile,Duration,AvgWatts,Joules" > $RESULTS_FILE; fi
 
-run_adaptive_phase "1" "preprocessing" "sequential" "0.5"
-run_adaptive_phase "2" "train" "training" "0.5"
-run_adaptive_phase "3" "inference" "inference" "0.2"
+# Nutze das globale Gewicht (per Argument oder Default 0.0)
+run_adaptive_phase "1" "preprocessing" "sequential" "$GLOBAL_WEIGHT"
+run_adaptive_phase "2" "train" "training" "$GLOBAL_WEIGHT"
+run_adaptive_phase "3" "inference" "inference" "$GLOBAL_WEIGHT"
 
 TS=$(date +%Y-%m-%dT%H:%M:%S)
 log_header "SUMMARY"
@@ -254,7 +255,7 @@ for job in "ml-preprocessing-job" "ml-train-job" "ml-inference-job"; do
     if [ -n "${STATS_NODES[$job]+1}" ]; then
         printf "%-20s | %-15s | %-15s | %-10s | %-10s | %-10s\n" \
             "${job#ml-}" "${STATS_NODES[$job]}" "${STATS_PROFILES[$job]}" "${STATS_DURATION[$job]}" "${STATS_AVG_POWER[$job]}" "${STATS_JOULES[$job]}"
-        echo "$TS,${job#ml-},Adaptive,${STATS_NODES[$job]},${STATS_PROFILES[$job]},${STATS_DURATION[$job]},${STATS_AVG_POWER[$job]},${STATS_JOULES[$job]}" >> $RESULTS_FILE
+        echo "$TS,${job#ml-},$GLOBAL_WEIGHT,${STATS_NODES[$job]},${STATS_PROFILES[$job]},${STATS_DURATION[$job]},${STATS_AVG_POWER[$job]},${STATS_JOULES[$job]}" >> $RESULTS_FILE
     fi
 done
 echo -e "\n${GREEN}Ergebnisse gespeichert in $RESULTS_FILE${NC}"

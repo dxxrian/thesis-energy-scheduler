@@ -1,4 +1,3 @@
-# ml-workflow/src/inference.py
 import tensorflow as tf
 import numpy as np
 import time
@@ -6,17 +5,24 @@ import os
 import sys
 import pickle
 
-TOTAL_SAMPLES = int(os.environ.get('TOTAL_SAMPLES', 10_000_000))
-BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 16384)) 
+# --- KONFIGURATION VIA ENV ---
+# Batch 16 = Sweet Spot für Wyse Einbruch (No-AVX Limit)
+BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 16))
+# Passen wir später in der YAML an (z.B. auf 5000 für Wyse)
+TOTAL_SAMPLES = int(os.environ.get('TOTAL_SAMPLES', 5000))
+
+# Fallback, falls Config-Datei fehlt
+DEFAULT_LAYER_SIZE = int(os.environ.get('LAYER_SIZE', 4096))
 
 MODEL_PATH = '/data/retail_model.h5'
 WEIGHTS_PATH = '/data/retail_model.weights.pkl'
 SHAPE_PATH = '/data/model_shape.txt'
+CONFIG_PATH = '/data/model_config.txt' # Hier steht die Layer-Größe vom Training
 
 sys.stdout.reconfigure(line_buffering=True)
 
-print(f"--- Phase 3: Inferenz (Robust Loader v6) ---")
-script_start_time = time.time()
+print(f"--- Phase 3: Inferenz (Flexible Config) ---")
+print(f"Ziel: {TOTAL_SAMPLES} Samples | Batch: {BATCH_SIZE}")
 
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
@@ -24,15 +30,21 @@ if gpus:
     try: tf.config.experimental.set_memory_growth(gpus[0], True)
     except: pass
 
-def build_manual_model(input_dim):
-    print(f"🔨 Baue Modell manuell nach (Input Dim: {input_dim})...", flush=True)
+def build_manual_model(input_dim, layer_size):
+    print(f"🔨 Baue Modell manuell (Input: {input_dim}, Layer-Size: {layer_size})...", flush=True)
     model = tf.keras.Sequential([
         tf.keras.layers.Input(shape=(input_dim,)),
-        tf.keras.layers.Dense(1024, activation='relu'),
+        
+        tf.keras.layers.Dense(layer_size, activation='relu'),
         tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(512, activation='relu'),
-        tf.keras.layers.Dropout(0.2),
-        tf.keras.layers.Dense(256, activation='relu'),
+        
+        tf.keras.layers.Dense(layer_size, activation='relu'),
+        tf.keras.layers.Dropout(0.3),
+        
+        tf.keras.layers.Dense(layer_size, activation='relu'),
+        tf.keras.layers.Dropout(0.3),
+        
+        tf.keras.layers.Dense(1024, activation='relu'),
         tf.keras.layers.Dense(1, activation='sigmoid')
     ])
     return model
@@ -40,73 +52,78 @@ def build_manual_model(input_dim):
 try:
     model = None
     
-    # STRATEGIE 1: H5 Load
+    # 1. Versuche H5 Load
     if os.path.exists(MODEL_PATH):
         try:
-            print(f"Versuche Standard-Laden von {MODEL_PATH}...", flush=True)
+            print("Versuche H5 Load...", flush=True)
             model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-            print("✅ Standard-Laden erfolgreich.")
-        except Exception as e:
-            print(f"⚠️ Standard-Laden fehlgeschlagen: {e}", flush=True)
+            print("✅ H5 Load erfolgreich.")
+        except:
+            print("⚠ H5 Load fehlgeschlagen.")
             model = None
     
-    # STRATEGIE 2: Pickle Fallback
+    # 2. Pickle Fallback
     if model is None:
-        print("🚀 Starte Fallback-Strategie (Pickle Weights)...", flush=True)
+        print("🚀 Starte Fallback (Pickle)...", flush=True)
+        
+        # Metadaten lesen
         if not os.path.exists(SHAPE_PATH) or not os.path.exists(WEIGHTS_PATH):
-            raise FileNotFoundError("Shape- oder Weight-Files fehlen!")
+            raise FileNotFoundError("Metadaten fehlen!")
 
         with open(SHAPE_PATH, 'r') as f:
             input_dim = int(f.read().strip())
+            
+        # Versuche Layer-Größe vom Training zu lesen, sonst ENV/Default
+        layer_size = DEFAULT_LAYER_SIZE
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'r') as f:
+                layer_size = int(f.read().strip())
+                print(f"ℹ️ Layer-Größe aus Config übernommen: {layer_size}")
         
-        model = build_manual_model(input_dim)
+        model = build_manual_model(input_dim, layer_size)
 
-        print(f"Lade Gewichte aus {WEIGHTS_PATH}...", flush=True)
+        print("Lade Gewichte...", flush=True)
         with open(WEIGHTS_PATH, 'rb') as f:
             weights_list = pickle.load(f)
         
-        # NEU: Liste zurück in Numpy Array wandeln
-        print("Konvertiere Listen zu NumPy Arrays...", flush=True)
         weights = [np.array(w) for w in weights_list]
-        
         model.set_weights(weights)
-        print("✅ Fallback-Laden erfolgreich.")
+        print("✅ Fallback erfolgreich.")
 
     input_shape = model.input_shape[1]
     
     num_batches = int(np.ceil(TOTAL_SAMPLES / BATCH_SIZE))
-    print(f"Starte Inferenz ({num_batches} Batches)...", flush=True)
+    print(f"Starte Loop ({num_batches} Batches)...", flush=True)
     
     start_time = time.time()
-    processed = 0
-    
-    @tf.function(experimental_relax_shapes=True)
-    def predict_step(data):
-        return model(data, training=False)
-
-    # Warmup
-    dummy_data = tf.random.uniform((BATCH_SIZE, input_shape))
-    _ = predict_step(dummy_data)
-    
-    print("Loop startet...", flush=True)
+    processed_samples = 0
     loop_start = time.time()
 
+    # Eager Execution Loop
     for i in range(num_batches):
         data = tf.random.uniform((BATCH_SIZE, input_shape))
-        _ = predict_step(data)
-        processed += BATCH_SIZE
+        _ = model(data, training=False)
+        processed_samples += BATCH_SIZE
         
+        # Logging alle 50 Batches
         if (i+1) % 50 == 0:
             elapsed = time.time() - loop_start
-            rate = processed / elapsed
-            print(f"   Batch {i+1}/{num_batches} | {processed/1e6:.1f}M Samples | {rate:.0f} S/s", flush=True)
+            rate = processed_samples / elapsed
+            batches_left = num_batches - (i+1)
+            # Batch Rate für ETA
+            batch_rate = (i+1) / elapsed 
+            eta = batches_left / batch_rate if batch_rate > 0 else 0
+            
+            print(f"   Batch {i+1}/{num_batches} | {rate:.0f} Samples/s | ETA: {eta:.0f}s", flush=True)
 
-    print(f"Fertig. Gesamtdauer: {time.time() - start_time:.2f}s")
+    total_duration = time.time() - start_time
+    final_throughput = processed_samples / total_duration
+    
+    print(f"✅ Fertig. Dauer: {total_duration:.2f}s")
+    print(f"📊 Performance: {final_throughput:.2f} Samples/s")
 
 except Exception as e:
-    print(f"❌ FATALER FEHLER: {e}", file=sys.stderr)
+    print(f"❌ FEHLER: {e}", file=sys.stderr)
     import traceback
     traceback.print_exc()
     sys.exit(1)
-
-sys.exit(0)

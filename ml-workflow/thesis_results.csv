@@ -1,0 +1,7 @@
+Timestamp,Phase,Weight,Node,Profile,Duration,AvgWatts,Joules
+2026-01-21T21:25:01,preprocessing-job,0.0,rpi,rpi-cpu,781,2.88,2249.28
+2026-01-21T21:25:01,train-job,0.0,tvpc,tvpc-gpu,127,181.25,23018.75
+2026-01-21T21:25:01,inference-job,0.0,tvpc,tvpc-gpu,71,104.87,7445.77
+2026-01-21T21:49:32,preprocessing-job,0.0,rpi,rpi-cpu,791,2.87,2270.17
+2026-01-21T21:49:32,train-job,0.0,tvpc,tvpc-gpu,119,185.99,22132.81
+2026-01-21T21:49:32,inference-job,0.0,tvpc,tvpc-gpu,70,104.41,7308.70

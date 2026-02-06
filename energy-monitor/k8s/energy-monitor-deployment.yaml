@@ -18,5 +18,5 @@ spec:
       serviceAccountName: energy-monitor-sa
       containers:
       - name: monitor
-        image: 192.168.188.23:5000/energy-monitor:v2
+        image: 192.168.188.23:5000/energy-monitor:v1
         imagePullPolicy: Always

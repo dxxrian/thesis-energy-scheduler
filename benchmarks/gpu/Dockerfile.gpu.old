@@ -1,0 +1,9 @@
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+
+WORKDIR /app
+COPY gpu-task.py .
+
+# COPY requirements.gpu.txt .
+# RUN pip install -r requirements.gpu.txt
+
+ENTRYPOINT ["python", "gpu-task.py"]

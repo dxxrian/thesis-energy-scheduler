@@ -1,0 +1,9 @@
+Timestamp,Phase,Scheduler,Node,Duration,AvgWatts,Joules
+2026-02-01T11:51:25+00:00,preprocessing,Standard,rpi,1,0,0
+2026-02-01T11:53:07+00:00,preprocessing,Standard,rpi,3,2.75,8.25
+2026-02-01T11:55:32+00:00,preprocessing,Standard,tvpc,63,78.83,4966.29
+2026-02-01T11:57:35+00:00,train,Standard,tvpc,122,177.15,21612.30
+2026-02-01T12:00:01+00:00,inference,Standard,tvpc,143,89.64,12818.52
+2026-02-01T12:02:15+00:00,preprocessing,Standard,tvpc,63,80.82,5091.66
+2026-02-01T12:04:19+00:00,train,Standard,tvpc,122,178.96,21833.12
+2026-02-01T12:06:46+00:00,inference,Standard,tvpc,146,89.94,13131.24

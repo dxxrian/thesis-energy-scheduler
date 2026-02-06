@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-train-gpu
+spec:
+  restartPolicy: Never
+  runtimeClassName: nvidia
+  nodeName: "tvpc"
+  containers:
+  - name: task
+    image: 192.168.188.23:5000/benchmark-gpu:v1
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+    env:
+    - name: NODE_NAME
+      value: "tvpc"
+    - name: MATRIX_SIZE
+      value: "4096"
+    - name: NUM_ITERATIONS
+      value: "200"

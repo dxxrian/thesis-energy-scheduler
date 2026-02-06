@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: ml-inference-job
+  name: ml-preprocessing-job
   labels:
     app: ml-workflow
 spec:
@@ -9,19 +9,15 @@ spec:
     metadata:
       labels:
         app: ml-workflow
-        workload-profile: "inference"
+        workload-profile: "sequential"
       annotations:
         scheduler.policy/performance-weight: "0.5"
     spec:
-      schedulerName: my-energy-scheduler
       restartPolicy: Never
       containers:
-      - name: inference
-        image: 192.168.188.23:5000/ml-workflow-cpu-armv7:v1
-        command: ["python3", "inference.py"]
-        env:
-        - name: TOTAL_SAMPLES
-          value: "1000000"
+      - name: preprocess
+        image: 192.168.188.23:5000/ml-workflow-cpu-amd64:v1
+        command: ["python3", "preprocess.py"]
         volumeMounts:
         - name: data-storage
           mountPath: /data

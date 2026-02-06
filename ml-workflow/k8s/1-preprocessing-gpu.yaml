@@ -18,7 +18,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: preprocess
-        image: 192.168.188.23:5000/ml-workflow-gpu:v6
+        image: 192.168.188.23:5000/ml-workflow-gpu:v1
         command: ["python3", "preprocess.py"]
         resources:
           limits:
