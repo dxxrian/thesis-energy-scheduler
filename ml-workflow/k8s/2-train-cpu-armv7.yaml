@@ -22,6 +22,10 @@ spec:
         env:
         - name: EPOCHS
           value: "5"
+        - name: LAYER_SIZE
+          value: "4096"
+        - name: BATCH_SIZE
+          value: "4096"
         volumeMounts:
         - name: data-storage
           mountPath: /data

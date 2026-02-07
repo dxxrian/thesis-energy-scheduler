@@ -1,55 +1,37 @@
-import torch
-import time
 import os
+import time
+import torch
 
 def main():
-    node_name = os.environ.get('NODE_NAME', 'unknown')
-    
+    # Konfiguration laden (Default: 1 Mio. Iterationen)
+    iters = int(os.environ.get('NUM_ITERATIONS', 500000))
+    node = os.environ.get('NODE_NAME', 'unknown')
+
+    print(f"--- GPU SEQUENTIAL BENCHMARK: {node} ---")
+    # GPU-Verfügbarkeit prüfen
     if not torch.cuda.is_available():
-        print(f"Node {node_name}: No CUDA device found! Exiting.")
+        print("!!! FEHLER: KEINE GPU GEFUNDEN !!!")
         return
 
     device = torch.device("cuda")
-    print(f"Node {node_name}: Found CUDA device: {torch.cuda.get_device_name(0)}")
-    
-    try:
-        # Wir nehmen weniger Iterationen als beim Hashing, da Python-Loop Overhead hat
-        # Aber genug, um Zeit zu messen.
-        iterations = int(os.environ.get('HASH_ITERATIONS', 1000000)) 
-    except ValueError:
-        iterations = 1000000
-
-    print(f"Node {node_name}: Starting SEQUENTIAL dependency chain on GPU...")
-    print(f"Iterations: {iterations}")
-
-    # Ein Skalar auf der GPU (1x1 Tensor)
+    print(f"Device: {torch.cuda.get_device_name(0)}")
+    print(f"Aufgabe: {iters} sequentielle Operationen")
+    # Initialisierung der Tensoren im VRAM
     val = torch.tensor([1.0], device=device)
     multiplier = torch.tensor([1.0000001], device=device)
-
-    # Synchronisieren für faire Startzeit
     torch.cuda.synchronize()
     start_time = time.time()
-
-    # Die sequentielle Schleife
-    # x = x * multiplier
-    # Das ist eine Datenabhängigkeit! Der nächste Schritt kann nicht parallelisiert werden.
-    for _ in range(iterations):
+    for _ in range(iters):
         val = torch.mul(val, multiplier)
-    
-    # Ergebnis erzwingen (damit nichts wegoptimiert wird)
-    # Wir holen den Wert zurück auf die CPU
     final_res = val.item()
-
     torch.cuda.synchronize()
     end_time = time.time()
-    
     duration = end_time - start_time
-    ops_per_second = iterations / duration
+    score = iters / duration if duration > 0 else 0.0
 
-    print(f"Node {node_name}: GPU Sequential task completed.")
-    print(f"Node {node_name}: Final value (check): {final_res}")
-    print(f"Node {node_name}: Duration: {duration:.4f} seconds")
-    print(f"Node {node_name}: Performance: {ops_per_second:.2f} Ops/s")
+    print(f"ABGESCHLOSSEN. Dauer: {duration:.4f}s")
+    print(f"Ergebnis-Check: {final_res:.4f}")
+    print(f"RESULT_SCORE: {score:.2f}")
 
 if __name__ == "__main__":
     main()

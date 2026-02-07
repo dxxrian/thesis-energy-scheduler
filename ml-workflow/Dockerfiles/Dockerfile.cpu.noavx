@@ -1,0 +1,39 @@
+# Dockerfile.cpu.noavx
+# Für CPUs ohne AVX
+
+# Python 3.8 für Support mit TensorFlow 2.3
+FROM python:3.8-slim
+
+WORKDIR /app
+
+# System-Abhängigkeiten installieren
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Kopiere das TensorFlow Wheel ohne AVX
+# Quelle: https://www.eggwall.com/2020/09/compiling-tensorflow-without-avx.html
+COPY tensorflow-2.3.0-cp38-cp38-linux_x86_64.whl /tmp/
+
+# Pip Upgrade & Installation der Abhängigkeiten
+# - numpy<1.19: TF 2.3 ist inkompatibel mit numpy 1.20+
+# - pandas<1.2: Für Kompatibilität mit altem numpy
+# - protobuf: Limitierung auf 3.x, da TF 2.3 protobuf 4.x nicht unterstützt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    /tmp/tensorflow-2.3.0-cp38-cp38-linux_x86_64.whl \
+    "numpy<1.19" \
+    "pandas<1.2.0" \
+    "scikit-learn<1.0" \
+    "protobuf<=3.20.3" \
+    requests \
+    openpyxl
+
+# Datensatz für Preprocess kopieren
+COPY online+retail+ii.zip .
+
+# Alle Quellcode-Skripte kopieren (preprocess, train, inference)
+COPY src/ .
+
+# Fallback-Ausführung (wird durch Kubernetes YAML überschrieben)
+CMD ["python", "preprocess.py"]

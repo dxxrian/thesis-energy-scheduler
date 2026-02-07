@@ -25,10 +25,8 @@ data:
               - name: NodeResourcesFit
           score:
             enabled:
-              # Die Standard-Plugins werden jetzt nicht mehr deaktiviert,
-              # aber unser Plugin bekommt das höchste Gewicht.
               - name: EnergyScorer
-                weight: 100 # Noch höheres Gewicht zur Sicherheit
+                weight: 100
               - name: NodeResourcesBalancedAllocation
                 weight: 1
               - name: ImageLocality

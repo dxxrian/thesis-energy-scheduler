@@ -9,23 +9,18 @@ kind: ClusterRole
 metadata:
   name: my-energy-scheduler-role
 rules:
-  # Erlaubt das Erstellen von Events
   - apiGroups: ["", "events.k8s.io"]
     resources: ["events"]
     verbs: ["create", "patch", "update"]
-  # Erlaubt die Leader Election für Hochverfügbarkeit
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Die Kern-Berechtigungen zum Binden von Pods an Nodes
   - apiGroups: [""]
     resources: ["pods/binding"]
     verbs: ["create"]
-  # Erlaubt das Aktualisieren des Pod-Status
   - apiGroups: [""]
     resources: ["pods/status"]
     verbs: ["patch", "update"]
-  # Erlaubt das Lesen aller wichtigen Ressourcen für Scheduling-Entscheidungen
   - apiGroups: ["", "apps", "policy", "storage.k8s.io"]
     resources:
       - "nodes"

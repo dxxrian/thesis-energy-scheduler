@@ -3,23 +3,26 @@ import os
 import hashlib
 
 def main():
-    try:
-        iterations = int(os.environ.get('HASH_ITERATIONS', 2000000))
-    except ValueError:
-        iterations = 2000000
-    node_name = os.environ.get('NODE_NAME', 'unknown')
-    print(f"Starting sequential hash task on node {node_name} for {iterations} iterations...")
-    current_hash = b'start_value'
-
+    # Konfiguration laden (Default: 2 Mio. Iterationen)
+    iters = int(os.environ.get('HASH_ITERATIONS', 2000000))
+    node = os.environ.get('NODE_NAME', 'unknown')
+    print(f"--- SEQUENTIAL BENCHMARK (SHA-256) ---")
+    print(f"Node: {node} | Iterations: {iters}")
+    # Startwert für die Hashing-Kette
+    current_hash = b'initial_seed_value'
+    print("Starte Messung...")
     start_time = time.time()
 
-    for i in range(iterations):
+    for _ in range(iters):
+        # Strikt sequentielle Abhängigkeit für Single-Core-Last: Output n ist Input n+1
         current_hash = hashlib.sha256(current_hash).digest()
     duration = time.time() - start_time
-    hashes_per_second = iterations / duration if duration > 0 else 0
 
-    print(f"Node {node_name}: Sequential task duration: {duration:.4f} seconds.")
-    print(f"Node {node_name}: Performance (Hashes/s): {hashes_per_second:.2f}")
+    # Berechne Leistungs-Rate in Hashes pro Sekunde
+    score = iters / duration if duration > 0 else 0.0
+
+    print(f"ABGESCHLOSSEN. Dauer: {duration:.4f}s")
+    print(f"RESULT_SCORE: {score:.2f}")
 
 if __name__ == "__main__":
     main()

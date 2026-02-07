@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-train-rpi
+spec:
+  restartPolicy: Never
+  nodeName: "rpi"
+  containers:
+  - name: task
+    image: 192.168.188.23:5000/benchmark-cpu-armv7:v1
+    env:
+    - name: NODE_NAME
+      value: "rpi"
+    - name: MATRIX_SIZE
+      value: "4096"
+    - name: NUM_ITERATIONS
+      value: "1"

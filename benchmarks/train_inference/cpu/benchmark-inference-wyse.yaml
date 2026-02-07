@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-inference-wyse
+spec:
+  restartPolicy: Never
+  nodeName: "wyse"
+  containers:
+  - name: task
+    image: 192.168.188.23:5000/benchmark-cpu-noavx:v1
+    env:
+    - name: NODE_NAME
+      value: "wyse"
+    - name: MATRIX_SIZE
+      value: "128"
+    - name: NUM_ITERATIONS
+      value: "500000"

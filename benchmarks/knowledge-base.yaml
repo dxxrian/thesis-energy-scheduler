@@ -6,10 +6,9 @@ metadata:
   namespace: kube-system
 data:
   profiles.yaml: |
-    # Profil 1: Training (große, parallele Last)
     training:
-      # Leistung in It/min
-      - nodeName: "tvpc-cpu" # Eindeutiger Name zur Unterscheidung von der GPU
+      # Leistung Training in It/min
+      - nodeName: "tvpc-cpu"
         performanceRate: 68.39
         powerConsumptionWatts: 136.89
         idlePowerWatts: 50.06
@@ -26,9 +25,8 @@ data:
         powerConsumptionWatts: 226.72
         idlePowerWatts: 50.06
 
-    # Profil 2: Inferenz (viele kleine, parallele Lasten)
     inference:
-      # Leistung in It/s
+      # Leistung Inferenz in It/s
       - nodeName: "tvpc-cpu"
         performanceRate: 22036.82
         powerConsumptionWatts: 120.95
@@ -46,9 +44,8 @@ data:
         powerConsumptionWatts: 98.14
         idlePowerWatts: 50.06
 
-    # Profil 3: Sequenziell (Single-Core-Last)
     sequential:
-      # Leistung in Hashes/ms (Hashes/s geteilt durch 1000)
+      # Leistung Datenvorverarbeitung in Hashes/ms
       - nodeName: "tvpc-cpu"
         performanceRate: 1184.01
         powerConsumptionWatts: 77.52

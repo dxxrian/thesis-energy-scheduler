@@ -1,0 +1,57 @@
+# Dockerfile.cpu.armv7
+FROM python:3.8-slim-buster
+WORKDIR /app
+
+# 1. System-Dependencies installieren
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    build-essential \
+    gfortran \
+    libhdf5-dev \
+    libc-ares-dev \
+    libeigen3-dev \
+    libatlas-base-dev \
+    libopenblas-dev \
+    libblas-dev \
+    openmpi-bin \
+    libopenmpi-dev \
+    liblapack-dev \
+    cython \
+    libreadline-dev \
+    libncursesw5-dev \
+    libssl-dev \
+    libsqlite3-dev \
+    tk-dev \
+    libgdbm-dev \
+    libc6-dev \
+    libbz2-dev \
+    libffi-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Glibc Update > 2.29
+RUN echo "Package: *\nPin: release a=stable\nPin-Priority: 900\n\nPackage: *\nPin: release a=testing\nPin-Priority: 650" > /etc/apt/preferences \
+    && echo "deb http://deb.debian.org/debian testing main contrib" >> /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y -t testing libc6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 3. Python Packages für den Build
+RUN pip install --no-cache-dir --upgrade setuptools wheel \
+    && pip install --no-cache-dir \
+    keras_applications \
+    keras_preprocessing \
+    six \
+    mock \
+    pybind11 \
+    h5py
+
+# 4. TensorFlow Wheel installieren
+RUN wget -q https://github.com/Qengineering/TensorFlow-Raspberry-Pi/raw/master/tensorflow-2.5.0-cp38-cp38-linux_armv7l.whl \
+    && pip install tensorflow-2.5.0-cp38-cp38-linux_armv7l.whl \
+    && rm tensorflow-2.5.0-cp38-cp38-linux_armv7l.whl
+
+# 5. Skript kopieren und Entrypoint setzen
+COPY cpu-task.py .
+
+ENTRYPOINT ["python", "cpu-task.py"]

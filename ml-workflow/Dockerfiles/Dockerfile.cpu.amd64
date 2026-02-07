@@ -1,0 +1,23 @@
+# Dockerfile.cpu.amd64
+# Für CPUs mit AVX
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    tensorflow \
+    pandas \
+    scikit-learn \
+    requests \
+    openpyxl
+
+COPY online+retail+ii.zip .
+COPY src/ .
+
+#Fallback
+CMD ["python", "preprocess.py"]

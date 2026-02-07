@@ -21,7 +21,11 @@ spec:
         command: ["python3", "inference.py"]
         env:
         - name: TOTAL_SAMPLES
-          value: "1000000"
+          value: "10000"
+        - name: BATCH_SIZE
+          value: "1"
+        - name: LAYER_SIZE
+          value: "4096"
         volumeMounts:
         - name: data-storage
           mountPath: /data

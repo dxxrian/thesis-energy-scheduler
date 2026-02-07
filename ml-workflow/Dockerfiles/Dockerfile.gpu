@@ -1,0 +1,26 @@
+# Dockerfile.gpu
+# Für Nodes mit Nvidia GPU (braucht Nvidia Container Toolkit)
+FROM nvidia/cuda:12.0.0-base-ubuntu22.04
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python-is-python3 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    "tensorflow[and-cuda]" \
+    pandas \
+    scikit-learn \
+    requests \
+    openpyxl
+
+COPY online+retail+ii.zip .
+COPY src/ .
+
+#Fallback
+CMD ["python", "train.py"]
